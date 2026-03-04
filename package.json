@@ -1,5 +1,5 @@
 {
-  "name": "abtyp-whatsapp-flow",
+  "name": "whatsapp-flow-server",
   "version": "1.0.0",
   "main": "server.js",
   "dependencies": {
