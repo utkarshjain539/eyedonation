@@ -1,177 +1,200 @@
 const express = require("express");
-const axios = require("axios");
 const crypto = require("crypto");
+const axios = require("axios");
 
 const app = express();
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json());
 
-/* ============================= */
-/* PRIVATE KEY FROM RENDER ENV   */
-/* ============================= */
+/* ================= CONFIG ================= */
 
-const PRIVATE_KEY = process.env.PRIVATE_KEY
-  ? process.env.PRIVATE_KEY.replace(/\\n/g, "\n")
-  : null;
+const ABTYP_HEADERS = {
+    "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%",
+    "Content-Type": "application/json"
+};
 
-if (!PRIVATE_KEY) {
-  console.error("PRIVATE_KEY not found in environment variables.");
-}
+const privateKeyInput = process.env.PRIVATE_KEY || "";
 
-/* ============================= */
-/* HEALTH CHECK                  */
-/* ============================= */
+const formattedKey = privateKeyInput.includes("BEGIN PRIVATE KEY")
+    ? privateKeyInput.replace(/\\n/g, "\n")
+    : `-----BEGIN PRIVATE KEY-----\n${privateKeyInput}\n-----END PRIVATE KEY-----`;
+
+console.log("🚀 Server Booted");
+
+/* ================= HELPERS ================= */
+
+const mapList = (arr) =>
+    (arr || []).map(item => ({
+        id: item.Id.toString(),
+        title: item.Name
+    }));
+
+/* ================= ROOT ================= */
 
 app.get("/", (req, res) => {
-  res.send("ABTYP WhatsApp Flow Server Running");
+    res.status(200).send("🚀 ABTYP Flow Live");
 });
 
-/* ============================= */
-/* DECRYPT WHATSAPP FLOW REQUEST */
-/* ============================= */
-
-function decryptRequest(body) {
-  const encryptedAesKey = Buffer.from(body.encrypted_aes_key, "base64");
-  const encryptedData = Buffer.from(body.encrypted_flow_data, "base64");
-  const iv = Buffer.from(body.initial_vector, "base64");
-
-  const aesKey = crypto.privateDecrypt(
-    {
-      key: PRIVATE_KEY,
-      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-    },
-    encryptedAesKey
-  );
-
-  const tag = encryptedData.slice(encryptedData.length - 16);
-  const text = encryptedData.slice(0, encryptedData.length - 16);
-
-  const decipher = crypto.createDecipheriv("aes-256-gcm", aesKey, iv);
-  decipher.setAuthTag(tag);
-
-  let decrypted = decipher.update(text);
-  decrypted = Buffer.concat([decrypted, decipher.final()]);
-
-  return {
-    decryptedBody: JSON.parse(decrypted.toString()),
-    aesKey,
-    iv,
-  };
-}
-
-/* ============================= */
-/* ENCRYPT RESPONSE              */
-/* ============================= */
-
-function encryptResponse(response, aesKey, iv) {
-  const cipher = crypto.createCipheriv("aes-256-gcm", aesKey, iv);
-
-  let encrypted = cipher.update(JSON.stringify(response), "utf8");
-  encrypted = Buffer.concat([encrypted, cipher.final()]);
-
-  const tag = cipher.getAuthTag();
-
-  return Buffer.concat([encrypted, tag]).toString("base64");
-}
-
-/* ============================= */
-/* FLOW ENDPOINT                 */
-/* ============================= */
+/* ================= FLOW HANDLER ================= */
 
 app.post("/", async (req, res) => {
-  try {
-    const { decryptedBody, aesKey, iv } = decryptRequest(req.body);
 
-    console.log("Flow Request:", decryptedBody);
+    const { encrypted_aes_key, encrypted_flow_data, initial_vector, authentication_tag } = req.body;
 
-    const { action, screen, data } = decryptedBody;
-
-    let response = {};
-
-    /* INIT → LOAD COUNTRIES */
-
-    if (action === "INIT") {
-      const api = await axios.get("https://api.abtyp.org/w0/get-country");
-
-      response = {
-        screen: "COUNTRY_SCREEN",
-        data: {
-          country: api.data.Data.map((c) => ({
-            id: String(c.Id),
-            title: c.Name,
-          })),
-        },
-      };
+    if (!encrypted_aes_key) {
+        return res.status(200).send("OK");
     }
 
-    /* STATE SCREEN */
+    try {
 
-    else if (screen === "STATE_SCREEN") {
-      const api = await axios.get(
-        `https://api.abtyp.org/w0/get-state?CountryId=${data.country}`
-      );
+        /* ===== RSA DECRYPT ===== */
 
-      response = {
-        screen: "STATE_SCREEN",
-        data: {
-          state: api.data.Data.map((s) => ({
-            id: String(s.Id),
-            title: s.Name,
-          })),
-        },
-      };
+        const aesKey = crypto.privateDecrypt({
+            key: formattedKey,
+            padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+            oaepHash: "sha256"
+        }, Buffer.from(encrypted_aes_key, "base64"));
+
+        /* ===== AES IV PREP ===== */
+
+        const requestIv = Buffer.from(initial_vector, "base64");
+        const responseIv = Buffer.alloc(requestIv.length);
+
+        for (let i = 0; i < requestIv.length; i++) {
+            responseIv[i] = ~requestIv[i];
+        }
+
+        /* ===== AES DECRYPT ===== */
+
+        const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
+        const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
+
+        decipher.setAuthTag(
+            authentication_tag
+                ? Buffer.from(authentication_tag, "base64")
+                : flowBuffer.slice(-16)
+        );
+
+        const decrypted =
+            decipher.update(
+                authentication_tag ? flowBuffer : flowBuffer.slice(0, -16),
+                "binary",
+                "utf8"
+            ) + decipher.final("utf8");
+
+        const { action, screen, data } = JSON.parse(decrypted);
+
+        console.log("➡️ Action:", action, "| Screen:", screen);
+
+        let responsePayloadObj = {
+            version: "3.0",
+            data: {}
+        };
+
+        /* ================= INIT ================= */
+
+        if (action === "INIT") {
+
+            const countryRes = await axios.get(
+                "https://api.abtyp.org/v0/country",
+                { headers: ABTYP_HEADERS }
+            );
+
+            responsePayloadObj.screen = "LOCATION_SELECT";
+            responsePayloadObj.data = {
+                country_list: mapList(countryRes.data?.Data || []),
+                state_list: [],
+                parishad_list: [],
+                sel_c: "",
+                sel_s: "",
+                sel_p: ""
+            };
+        }
+
+        /* ================= DATA EXCHANGE ================= */
+
+        else if (action === "data_exchange") {
+
+            /* LOAD STATE */
+
+            if (data.step === "LOAD_STATE") {
+
+                const stateRes = await axios.get(
+                    `https://api.abtyp.org/v0/state?CountryId=${data.country}`,
+                    { headers: ABTYP_HEADERS }
+                );
+
+                responsePayloadObj.screen = "LOCATION_SELECT";
+                responsePayloadObj.data = {
+                    country_list: [],
+                    state_list: mapList(stateRes.data?.Data || []),
+                    parishad_list: [],
+                    sel_c: data.country,
+                    sel_s: "",
+                    sel_p: ""
+                };
+            }
+
+            /* LOAD PARISHAD */
+
+            else if (data.step === "LOAD_PARISHAD") {
+
+                const parishadRes = await axios.get(
+                    `https://api.abtyp.org/v0/parishad?StateId=${data.state}`,
+                    { headers: ABTYP_HEADERS }
+                );
+
+                responsePayloadObj.screen = "LOCATION_SELECT";
+                responsePayloadObj.data = {
+                    country_list: [],
+                    state_list: [],
+                    parishad_list: mapList(parishadRes.data?.Data || []),
+                    sel_c: data.country,
+                    sel_s: data.state,
+                    sel_p: ""
+                };
+            }
+
+            /* GET WHATSAPP GROUP */
+
+            else if (data.step === "GET_GROUP") {
+
+                const linkRes = await axios.get(
+                    `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad}`,
+                    { headers: ABTYP_HEADERS }
+                );
+
+                responsePayloadObj.screen = "GROUP_LINK";
+                responsePayloadObj.data = {
+                    whatsapp_link: linkRes.data?.Data?.GroupLink || ""
+                };
+            }
+        }
+
+        console.log("📤 Response:", responsePayloadObj);
+
+        /* ===== ENCRYPT RESPONSE ===== */
+
+        const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
+
+        const encrypted = Buffer.concat([
+            cipher.update(JSON.stringify(responsePayloadObj), "utf8"),
+            cipher.final()
+        ]);
+
+        return res.status(200).send(
+            Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64")
+        );
+
+    } catch (err) {
+
+        console.error("❌ ERROR:", err.message);
+
+        return res.status(500).send("Server Error");
     }
-
-    /* PARISHAD SCREEN */
-
-    else if (screen === "PARISHAD_SCREEN") {
-      const api = await axios.get(
-        `https://api.abtyp.org/w0/get-parishad?StateId=${data.state}`
-      );
-
-      response = {
-        screen: "PARISHAD_SCREEN",
-        data: {
-          parishad: api.data.Data.map((p) => ({
-            id: String(p.Id),
-            title: p.Name,
-          })),
-        },
-      };
-    }
-
-    /* FINAL SCREEN → GROUP LINK */
-
-    else if (screen === "SUCCESS_SCREEN") {
-      const api = await axios.get(
-        `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad}`
-      );
-
-      response = {
-        screen: "SUCCESS_SCREEN",
-        data: {
-          group_link: api.data.Data.GroupLink,
-        },
-      };
-    }
-
-    const encryptedResponse = encryptResponse(response, aesKey, iv);
-
-    res.json({
-      encrypted_flow_data: encryptedResponse,
-    });
-  } catch (error) {
-    console.error("FLOW ERROR:", error);
-
-    res.status(500).send("Server Error");
-  }
 });
 
-/* ============================= */
-/* START SERVER                  */
-/* ============================= */
+/* ================= START ================= */
 
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.listen(process.env.PORT || 3000, () => {
+    console.log("🚀 Server Running");
 });
