@@ -5,7 +5,7 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
-/* ================= CONFIG ================= */
+/* CONFIG */
 
 const ABTYP_HEADERS = {
   "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%",
@@ -24,13 +24,9 @@ const mapList = (arr) =>
     title: item.Name
   }));
 
-/* ================= ROOT ================= */
-
 app.get("/", (req, res) => {
   res.send("ABTYP Flow Server Running");
 });
-
-/* ================= FLOW HANDLER ================= */
 
 app.post("/", async (req, res) => {
 
@@ -52,8 +48,6 @@ app.post("/", async (req, res) => {
       },
       Buffer.from(encrypted_aes_key, "base64")
     );
-
-    /* IV */
 
     const requestIv = Buffer.from(initial_vector, "base64");
 
@@ -81,7 +75,35 @@ app.post("/", async (req, res) => {
         "utf8"
       ) + decipher.final("utf8");
 
-    const { action, screen, data } = JSON.parse(decrypted);
+    const payload = JSON.parse(decrypted);
+
+    const { action, screen, data } = payload;
+
+    console.log("Incoming:", payload);
+
+    /* ===== PING ===== */
+
+    if (action === "ping") {
+
+      const response = {
+        data: {
+          status: "active"
+        }
+      };
+
+      const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
+
+      const encrypted = Buffer.concat([
+        cipher.update(JSON.stringify(response), "utf8"),
+        cipher.final()
+      ]);
+
+      return res.status(200).send(
+        Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64")
+      );
+    }
+
+    /* ===== FLOW ===== */
 
     let response = {
       version: "3.0",
@@ -89,7 +111,7 @@ app.post("/", async (req, res) => {
       data: {}
     };
 
-    /* ================= INIT ================= */
+    /* INIT */
 
     if (action === "INIT") {
 
@@ -105,7 +127,7 @@ app.post("/", async (req, res) => {
       };
     }
 
-    /* ================= COUNTRY → STATE ================= */
+    /* COUNTRY → STATE */
 
     else if (screen === "COUNTRY_SCREEN") {
 
@@ -121,7 +143,7 @@ app.post("/", async (req, res) => {
       };
     }
 
-    /* ================= STATE → PARISHAD ================= */
+    /* STATE → PARISHAD */
 
     else if (screen === "STATE_SCREEN") {
 
@@ -137,7 +159,7 @@ app.post("/", async (req, res) => {
       };
     }
 
-    /* ================= PARISHAD → GROUP ================= */
+    /* PARISHAD → GROUP */
 
     else if (screen === "PARISHAD_SCREEN") {
 
@@ -168,14 +190,13 @@ app.post("/", async (req, res) => {
 
   } catch (err) {
 
-    console.error(err);
+    console.error("Server Error:", err);
+
     return res.status(500).send("Server Error");
 
   }
 
 });
-
-/* ================= START ================= */
 
 app.listen(process.env.PORT || 3000, () => {
   console.log("Server Running");
