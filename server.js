@@ -4,22 +4,20 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
-/* TEST ROUTE */
+/* Test Route */
 app.get("/", (req, res) => {
   res.send("ABTYP WhatsApp Flow Server Running");
 });
 
-/* WHATSAPP FLOW ENDPOINT */
 app.post("/", async (req, res) => {
   try {
 
-    const screen = req.body.screen;
-    const data = req.body.data || {};
+    console.log("Incoming request:", req.body);
 
-    console.log("Incoming Flow Request:", req.body);
+    const { action, screen, data } = req.body;
 
-    /* COUNTRY SCREEN */
-    if (screen === "COUNTRY_SCREEN") {
+    /* INIT REQUEST (Flow opened) */
+    if (action === "INIT") {
 
       const response = await axios.get(
         "https://api.abtyp.org/w0/get-country"
@@ -101,19 +99,21 @@ app.post("/", async (req, res) => {
       });
     }
 
-    return res.status(400).json({ error: "Unknown screen" });
+    return res.status(400).json({
+      error: "Unhandled request",
+      received: req.body
+    });
 
   } catch (error) {
 
-    console.error("Flow Error:", error.message);
+    console.error("Server error:", error.message);
 
-    return res.status(500).json({
+    res.status(500).json({
       error: "Server error"
     });
   }
 });
 
-/* SERVER START */
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
