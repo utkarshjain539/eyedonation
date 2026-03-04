@@ -31,12 +31,13 @@ const mapList = (arr) =>
 /* ================= ROOT ================= */
 
 app.get("/", (req, res) => {
-  res.status(200).send("🚀 ABTYP WhatsApp Flow Running");
+  res.send("ABTYP WhatsApp Flow Running");
 });
 
 /* ================= FLOW HANDLER ================= */
 
 app.post("/", async (req, res) => {
+
   const { encrypted_aes_key, encrypted_flow_data, initial_vector, authentication_tag } = req.body;
 
   if (!encrypted_aes_key) {
@@ -56,11 +57,11 @@ app.post("/", async (req, res) => {
       Buffer.from(encrypted_aes_key, "base64")
     );
 
-    /* ===== AES IV PREP ===== */
+    /* ===== IV PREP ===== */
 
     const requestIv = Buffer.from(initial_vector, "base64");
-    const responseIv = Buffer.alloc(requestIv.length);
 
+    const responseIv = Buffer.alloc(requestIv.length);
     for (let i = 0; i < requestIv.length; i++) {
       responseIv[i] = ~requestIv[i];
     }
@@ -68,6 +69,7 @@ app.post("/", async (req, res) => {
     /* ===== AES DECRYPT ===== */
 
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
+
     const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
 
     decipher.setAuthTag(
@@ -83,19 +85,41 @@ app.post("/", async (req, res) => {
         "utf8"
       ) + decipher.final("utf8");
 
-    const { action, screen, data } = JSON.parse(decrypted);
+    const { action, data } = JSON.parse(decrypted);
 
     console.log("➡️ Action:", action);
-    console.log("➡️ Screen:", screen);
-    console.log("➡️ Data:", data);
+
+    /* ================= PING ================= */
+
+    if (action === "ping") {
+
+      const pingResponse = {
+        data: {
+          status: "active"
+        }
+      };
+
+      const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
+
+      const encrypted = Buffer.concat([
+        cipher.update(JSON.stringify(pingResponse), "utf8"),
+        cipher.final()
+      ]);
+
+      return res.status(200).send(
+        Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64")
+      );
+    }
+
+    /* ================= NORMAL FLOW ================= */
 
     let responsePayloadObj = {
       version: "3.0",
-      screen: "",
+      screen: "LOCATION_SELECT",
       data: {}
     };
 
-    /* ================= INIT ================= */
+    /* INIT */
 
     if (action === "INIT") {
 
@@ -104,23 +128,16 @@ app.post("/", async (req, res) => {
         { headers: ABTYP_HEADERS }
       );
 
-      responsePayloadObj.screen = "LOCATION_SELECT";
-
       responsePayloadObj.data = {
-        country_list: mapList(countryRes.data?.Data || []),
-        state_list: [],
-        parishad_list: [],
-        country: "",
-        state: "",
-        parishad: ""
+        country: mapList(countryRes.data?.Data),
+        state: [],
+        parishad: []
       };
     }
 
-    /* ================= DATA EXCHANGE ================= */
+    /* DATA EXCHANGE */
 
     else if (action === "data_exchange") {
-
-      /* LOAD STATES */
 
       if (data.country && !data.state) {
 
@@ -129,19 +146,12 @@ app.post("/", async (req, res) => {
           { headers: ABTYP_HEADERS }
         );
 
-        responsePayloadObj.screen = "LOCATION_SELECT";
-
         responsePayloadObj.data = {
-          country_list: [],
-          state_list: mapList(stateRes.data?.Data || []),
-          parishad_list: [],
-          country: data.country,
-          state: "",
-          parishad: ""
+          country: [],
+          state: mapList(stateRes.data?.Data),
+          parishad: []
         };
       }
-
-      /* LOAD PARISHAD */
 
       else if (data.state && !data.parishad) {
 
@@ -150,19 +160,12 @@ app.post("/", async (req, res) => {
           { headers: ABTYP_HEADERS }
         );
 
-        responsePayloadObj.screen = "LOCATION_SELECT";
-
         responsePayloadObj.data = {
-          country_list: [],
-          state_list: [],
-          parishad_list: mapList(parishadRes.data?.Data || []),
-          country: data.country,
-          state: data.state,
-          parishad: ""
+          country: [],
+          state: [],
+          parishad: mapList(parishadRes.data?.Data)
         };
       }
-
-      /* FINAL STEP → GROUP LINK */
 
       else if (data.parishad) {
 
@@ -179,29 +182,6 @@ app.post("/", async (req, res) => {
       }
     }
 
-    /* ================= FALLBACK ================= */
-
-    if (!responsePayloadObj.screen) {
-
-      const countryRes = await axios.get(
-        "https://api.abtyp.org/v0/country",
-        { headers: ABTYP_HEADERS }
-      );
-
-      responsePayloadObj.screen = "LOCATION_SELECT";
-
-      responsePayloadObj.data = {
-        country_list: mapList(countryRes.data?.Data || []),
-        state_list: [],
-        parishad_list: [],
-        country: "",
-        state: "",
-        parishad: ""
-      };
-    }
-
-    console.log("📤 Response:", responsePayloadObj);
-
     /* ===== ENCRYPT RESPONSE ===== */
 
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
@@ -217,10 +197,11 @@ app.post("/", async (req, res) => {
 
   } catch (err) {
 
-    console.error("❌ ERROR:", err.message);
-
+    console.error(err);
     return res.status(500).send("Server Error");
+
   }
+
 });
 
 /* ================= START ================= */
