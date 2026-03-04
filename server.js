@@ -31,7 +31,7 @@ const mapList = (arr) =>
 /* ================= ROOT ================= */
 
 app.get("/", (req, res) => {
-    res.status(200).send("🚀 ABTYP Flow Live");
+    res.status(200).send("🚀 ABTYP WhatsApp Flow Running");
 });
 
 /* ================= FLOW HANDLER ================= */
@@ -83,7 +83,9 @@ app.post("/", async (req, res) => {
 
         const { action, screen, data } = JSON.parse(decrypted);
 
-        console.log("➡️ Action:", action, "| Screen:", screen);
+        console.log("➡️ Action:", action);
+        console.log("➡️ Screen:", screen);
+        console.log("➡️ Data:", data);
 
         let responsePayloadObj = {
             version: "3.0",
@@ -114,9 +116,9 @@ app.post("/", async (req, res) => {
 
         else if (action === "data_exchange") {
 
-            /* LOAD STATE */
+            /* LOAD STATES */
 
-            if (data.step === "LOAD_STATE") {
+            if (data.country && !data.state) {
 
                 const stateRes = await axios.get(
                     `https://api.abtyp.org/v0/state?CountryId=${data.country}`,
@@ -136,7 +138,7 @@ app.post("/", async (req, res) => {
 
             /* LOAD PARISHAD */
 
-            else if (data.step === "LOAD_PARISHAD") {
+            else if (data.state && !data.parishad) {
 
                 const parishadRes = await axios.get(
                     `https://api.abtyp.org/v0/parishad?StateId=${data.state}`,
@@ -154,9 +156,9 @@ app.post("/", async (req, res) => {
                 };
             }
 
-            /* GET WHATSAPP GROUP */
+            /* FINAL STEP → GROUP LINK */
 
-            else if (data.step === "GET_GROUP") {
+            else if (data.parishad) {
 
                 const linkRes = await axios.get(
                     `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad}`,
@@ -164,13 +166,36 @@ app.post("/", async (req, res) => {
                 );
 
                 responsePayloadObj.screen = "GROUP_LINK";
+
                 responsePayloadObj.data = {
                     whatsapp_link: linkRes.data?.Data?.GroupLink || ""
                 };
             }
         }
 
-        console.log("📤 Response:", responsePayloadObj);
+        /* ================= FALLBACK ================= */
+
+        if (!responsePayloadObj.screen) {
+
+            console.log("⚠️ No screen returned — fallback INIT");
+
+            const countryRes = await axios.get(
+                "https://api.abtyp.org/v0/country",
+                { headers: ABTYP_HEADERS }
+            );
+
+            responsePayloadObj.screen = "LOCATION_SELECT";
+            responsePayloadObj.data = {
+                country_list: mapList(countryRes.data?.Data || []),
+                state_list: [],
+                parishad_list: [],
+                sel_c: "",
+                sel_s: "",
+                sel_p: ""
+            };
+        }
+
+        console.log("📤 Final Response:", responsePayloadObj);
 
         /* ===== ENCRYPT RESPONSE ===== */
 
