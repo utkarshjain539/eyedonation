@@ -5,8 +5,6 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
-/* CONFIG */
-
 const ABTYP_HEADERS = {
   "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%",
   "Content-Type": "application/json"
@@ -24,10 +22,6 @@ const mapList = (arr) =>
     title: item.Name
   }));
 
-app.get("/", (req, res) => {
-  res.send("ABTYP Flow Server Running");
-});
-
 app.post("/", async (req, res) => {
 
   const { encrypted_aes_key, encrypted_flow_data, initial_vector, authentication_tag } = req.body;
@@ -37,8 +31,6 @@ app.post("/", async (req, res) => {
   }
 
   try {
-
-    /* RSA DECRYPT */
 
     const aesKey = crypto.privateDecrypt(
       {
@@ -55,8 +47,6 @@ app.post("/", async (req, res) => {
     for (let i = 0; i < requestIv.length; i++) {
       responseIv[i] = ~requestIv[i];
     }
-
-    /* AES DECRYPT */
 
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
 
@@ -75,21 +65,13 @@ app.post("/", async (req, res) => {
         "utf8"
       ) + decipher.final("utf8");
 
-    const payload = JSON.parse(decrypted);
+    const { action, data } = JSON.parse(decrypted);
 
-    const { action, screen, data } = payload;
-
-    console.log("Incoming:", payload);
-
-    /* ===== PING ===== */
+    /* PING */
 
     if (action === "ping") {
 
-      const response = {
-        data: {
-          status: "active"
-        }
-      };
+      const response = { data: { status: "active" } };
 
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
 
@@ -103,15 +85,13 @@ app.post("/", async (req, res) => {
       );
     }
 
-    /* ===== FLOW ===== */
-
     let response = {
       version: "3.0",
-      screen: "",
+      screen: "LOCATION_SCREEN",
       data: {}
     };
 
-    /* INIT */
+    /* INIT → COUNTRY */
 
     if (action === "INIT") {
 
@@ -120,62 +100,48 @@ app.post("/", async (req, res) => {
         { headers: ABTYP_HEADERS }
       );
 
-      response.screen = "COUNTRY_SCREEN";
-
-      response.data = {
-        country: mapList(countryRes.data?.Data)
-      };
+      response.data.country = mapList(countryRes.data?.Data);
+      response.data.state = [];
+      response.data.parishad = [];
     }
 
-    /* COUNTRY → STATE */
+    /* COUNTRY SELECTED */
 
-    else if (screen === "COUNTRY_SCREEN") {
+    else if (data.country && !data.state) {
 
       const stateRes = await axios.get(
         `https://api.abtyp.org/v0/state?CountryId=${data.country}`,
         { headers: ABTYP_HEADERS }
       );
 
-      response.screen = "STATE_SCREEN";
-
-      response.data = {
-        state: mapList(stateRes.data?.Data)
-      };
+      response.data.country = [];
+      response.data.state = mapList(stateRes.data?.Data);
+      response.data.parishad = [];
     }
 
-    /* STATE → PARISHAD */
+    /* STATE SELECTED */
 
-    else if (screen === "STATE_SCREEN") {
+    else if (data.state && !data.parishad) {
 
       const parishadRes = await axios.get(
         `https://api.abtyp.org/v0/parishad?StateId=${data.state}`,
         { headers: ABTYP_HEADERS }
       );
 
-      response.screen = "PARISHAD_SCREEN";
-
-      response.data = {
-        parishad: mapList(parishadRes.data?.Data)
-      };
+      response.data.parishad = mapList(parishadRes.data?.Data);
     }
 
-    /* PARISHAD → GROUP */
+    /* FINAL SUBMIT */
 
-    else if (screen === "PARISHAD_SCREEN") {
+    else if (data.parishad) {
 
       const linkRes = await axios.get(
         `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad}`,
         { headers: ABTYP_HEADERS }
       );
 
-      response.screen = "SUCCESS_SCREEN";
-
-      response.data = {
-        whatsapp_link: linkRes.data?.Data?.GroupLink || ""
-      };
+      response.data.whatsapp_link = linkRes.data?.Data?.GroupLink || "";
     }
-
-    /* ENCRYPT RESPONSE */
 
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
 
@@ -190,7 +156,7 @@ app.post("/", async (req, res) => {
 
   } catch (err) {
 
-    console.error("Server Error:", err);
+    console.error(err);
 
     return res.status(500).send("Server Error");
 
