@@ -53,26 +53,42 @@ app.post("/", async (req, res) => {
     console.log("DATA:", JSON.stringify(data, null, 2));
 
     /* --- HANDLE COMPLETION (SEND LINK AS MESSAGE) --- */
+    /* --- HANDLE COMPLETION (SEND LINK AS MESSAGE) --- */
     if (action === "complete") {
-      console.log("FLOW COMPLETED BY USER. FETCHING LINK...");
+      console.log("FLOW COMPLETED. DATA RECEIVED:", JSON.stringify(data));
 
-      const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
-      const groupLink = linkRes.data?.Data?.GroupLink || "Link not found";
-
-      // Trigger the WhatsApp Message
       try {
-        await axios.post(`https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`, {
-          messaging_product: "whatsapp",
-          to: decryptedPayload.phone_number || "USER_PHONE_NUMBER", 
-          type: "text",
-          text: { body: `Here is your ABTYP WhatsApp Group Link: ${groupLink}` }
-        }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
-      } catch (e) {
-        console.error("WhatsApp API Error:", e.response?.data || e.message);
-      }
+        // 1. Fetch Link from your API
+        const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
+        const groupLink = linkRes.data?.Data?.GroupLink || "Link not found";
 
-      // Return a plain 200 to acknowledge the completion
-      return res.status(200).send("OK");
+        // 2. Validate Meta Credentials before sending
+        if (PHONE_NUMBER_ID && WHATSAPP_TOKEN) {
+          // In 'complete' action, the phone number is usually in the top-level request (decryptedPayload)
+          const recipient = data.phone_number || decryptedPayload.phone_number;
+          
+          if (recipient) {
+            await axios.post(`https://graph.facebook.com/v25.0/1049088024951885/messages`, {
+              messaging_product: "whatsapp",
+              to: recipient,
+              type: "text",
+              text: { body: `Here is your ABTYP WhatsApp Group Link: ${groupLink}` }
+            }, { headers: { Authorization: `Bearer EAAb2OhvJlfEBQ5N3BIxn4STgZAoZCql4jIwZCUzmBDEY69cNY479xyVcKZAMiNNoNqHdZB8iRbDZCtyUq2dNmah4nZBHde5qCHxNdu2NZC0tSIAcAyksTZAJSucLCYWbKMY5y00eR7ZBzZCJy9THCMxJiOWYRmQX565bZBpYqAKqD1JLGZAGumsVokNYvu2Q8NKyO6w4m6wSEd2cC086QXdZC4ZBaRgSw2TwWVcUZCTEMKfzum6MThLkbGDB` } });
+            console.log("Message sent successfully to:", recipient);
+          } else {
+            console.warn("Recipient phone number not found in payload.");
+          }
+        } else {
+          console.error("Meta credentials (PHONE_NUMBER_ID/WHATSAPP_TOKEN) are missing.");
+        }
+
+        // 3. Always return a 200 OK to WhatsApp to prevent Flow errors
+        return res.status(200).send("OK");
+      } catch (e) {
+        console.error("Error during completion processing:", e.message);
+        // Still return 200 so the user's flow closes properly
+        return res.status(200).send("OK");
+      }
     }
 
     /* --- DROPDOWN LOGIC --- */
