@@ -11,8 +11,8 @@ const ABTYP_HEADERS = {
   "Content-Type": "application/json"
 };
 
-// You need these from your Meta Developer Dashboard
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+// Meta API Credentials
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID; 
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 
 const privateKeyInput = process.env.PRIVATE_KEY || "";
@@ -25,7 +25,7 @@ const mapList = (arr) => (arr || []).map((item) => ({
   title: item.Name
 }));
 
-app.get("/", (req, res) => res.send("ABTYP Flow Server Active"));
+app.get("/", (req, res) => res.send("ABTYP Server Online"));
 
 app.post("/", async (req, res) => {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector, authentication_tag } = req.body;
@@ -45,34 +45,37 @@ app.post("/", async (req, res) => {
     const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
     decipher.setAuthTag(authentication_tag ? Buffer.from(authentication_tag, "base64") : flowBuffer.slice(-16));
     const decrypted = decipher.update(authentication_tag ? flowBuffer : flowBuffer.slice(0, -16), "binary", "utf8") + decipher.final("utf8");
-    const { action, data, flow_token } = JSON.parse(decrypted);
+    
+    const decryptedPayload = JSON.parse(decrypted);
+    const { action, data } = decryptedPayload;
 
-    console.log("INCOMING DATA:", JSON.stringify(data, null, 2));
+    console.log("ACTION:", action);
+    console.log("DATA:", JSON.stringify(data, null, 2));
 
-    /* --- HANDLING COMPLETION & SENDING MESSAGE --- */
-    if (action === "complete" || (data && data.action === "submit")) {
-      console.log("SENDING WHATSAPP MESSAGE...");
+    /* --- HANDLE COMPLETION (SEND LINK AS MESSAGE) --- */
+    if (action === "complete") {
+      console.log("FLOW COMPLETED BY USER. FETCHING LINK...");
 
-      // 1. Fetch Group Link
       const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
       const groupLink = linkRes.data?.Data?.GroupLink || "Link not found";
 
-      // 2. Send Message via Meta API
-      // Note: User's phone number is usually in the request metadata or provided in the flow data
+      // Trigger the WhatsApp Message
       try {
         await axios.post(`https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`, {
           messaging_product: "whatsapp",
-          to: data.phone_number || "RECIPIENT_NUMBER", // Replace with dynamic user number
+          to: decryptedPayload.phone_number || "USER_PHONE_NUMBER", 
           type: "text",
-          text: { body: `Your ABTYP WhatsApp Group Link is: ${groupLink}` }
+          text: { body: `Here is your ABTYP WhatsApp Group Link: ${groupLink}` }
         }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
-      } catch (e) { console.error("Message Error:", e.response?.data || e.message); }
+      } catch (e) {
+        console.error("WhatsApp API Error:", e.response?.data || e.message);
+      }
 
-      // 3. Close the flow
-      return res.status(200).send("Flow Completed Successfully");
+      // Return a plain 200 to acknowledge the completion
+      return res.status(200).send("OK");
     }
 
-    /* --- DROPDOWN REFRESH LOGIC --- */
+    /* --- DROPDOWN LOGIC --- */
     let responseData = {
       country_list: [], state_list: [], parishad_list: [],
       is_state_enabled: false, is_parishad_enabled: false, is_submit_enabled: false
@@ -101,6 +104,7 @@ app.post("/", async (req, res) => {
     return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
 
   } catch (err) {
+    console.error("SERVER ERROR:", err.message);
     return res.status(500).send("Error");
   }
 });
