@@ -5,13 +5,11 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
-/* ================= CONFIG ================= */
 const ABTYP_HEADERS = {
   "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%",
   "Content-Type": "application/json"
 };
 
-// Meta API Credentials (Kept your hardcoded values where present)
 const PHONE_NUMBER_ID = "1049088024951885"; 
 const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQ5N3BIxn4STgZAoZCql4jIwZCUzmBDEY69cNY479xyVcKZAMiNNoNqHdZB8iRbDZCtyUq2dNmah4nZBHde5qCHxNdu2NZC0tSIAcAyksTZAJSucLCYWbKMY5y00eR7ZBzZCJy9THCMxJiOWYRmQX565bZBpYqAKqD1JLGZAGumsVokNYvu2Q8NKyO6w4m6wSEd2cC086QXdZC4ZBaRgSw2TwWVcUZCTEMKfzum6MThLkbGDB";
 
@@ -25,14 +23,13 @@ const mapList = (arr) => (arr || []).map((item) => ({
   title: item.Name
 }));
 
-app.get("/", (req, res) => res.send("ABTYP Server Online"));
+app.get("/", (req, res) => res.send("ABTYP Flow Server is Running"));
 
 app.post("/", async (req, res) => {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector, authentication_tag } = req.body;
   if (!encrypted_aes_key) return res.status(200).send("OK");
 
   try {
-    /* --- DECRYPTION --- */
     const aesKey = crypto.privateDecrypt(
       { key: formattedKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
       Buffer.from(encrypted_aes_key, "base64")
@@ -50,45 +47,33 @@ app.post("/", async (req, res) => {
     const { action, data } = decryptedPayload;
 
     console.log("ACTION:", action);
-    console.log("DATA:", JSON.stringify(data, null, 2));
 
-    /* --- HANDLE COMPLETION (SEND LINK AS MESSAGE) --- */
+    // 1. HANDLE COMPLETION (SEND LINK AS MESSAGE)
     if (action === "complete") {
-      console.log("FLOW COMPLETED. PROCESSING MESSAGE...");
-
-      // Final response body for Meta
-      const finalResponse = {
-        version: "3.0",
-        data: { acknowledged: true }
-      };
+      const finalResponse = { version: "3.0", data: { acknowledged: true } };
 
       try {
         const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
         const groupLink = linkRes.data?.Data?.GroupLink || "Link not found";
-
-        const recipient = data.phone_number || decryptedPayload.phone_number;
+        const recipient = decryptedPayload.phone_number || data.phone_number;
         
         if (recipient) {
-          // Note: Using v25.0 as in your original snippet
           await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
             messaging_product: "whatsapp",
             to: recipient,
             type: "text",
             text: { body: `Here is your ABTYP WhatsApp Group Link: ${groupLink}` }
           }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
-          console.log("Message sent successfully to:", recipient);
         }
-      } catch (e) {
-        console.error("Error in message sending:", e.message);
-      }
+      } catch (e) { console.error("Async Error:", e.message); }
 
-      // ENCRYPT THE FINAL RESPONSE (Crucial to prevent 500/Decryption errors)
+      // ENCRYPT ACKNOWLEDGEMENT
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
       const encrypted = Buffer.concat([cipher.update(JSON.stringify(finalResponse), "utf8"), cipher.final()]);
       return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
     }
 
-    /* --- DROPDOWN LOGIC --- */
+    // 2. DROPDOWN LOGIC
     let responseData = {
       country_list: [], state_list: [], parishad_list: [],
       is_state_enabled: false, is_parishad_enabled: false, is_submit_enabled: false
@@ -102,13 +87,11 @@ app.post("/", async (req, res) => {
       responseData.state_list = mapList(stateRes.data?.Data);
       responseData.is_state_enabled = responseData.state_list.length > 0;
     }
-
     if (data.state_id) {
       const parishadRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
       responseData.parishad_list = mapList(parishadRes.data?.Data);
       responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
     }
-
     if (data.parishad_id) responseData.is_submit_enabled = true;
 
     const flowResponse = { version: "3.0", screen: "LOCATION_SCREEN", data: responseData };
@@ -117,7 +100,6 @@ app.post("/", async (req, res) => {
     return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
 
   } catch (err) {
-    console.error("SERVER ERROR:", err.message);
     return res.status(500).send("Error");
   }
 });
