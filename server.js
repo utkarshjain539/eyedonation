@@ -11,7 +11,7 @@ const ABTYP_HEADERS = {
 };
 
 const PHONE_NUMBER_ID = "1049088024951885"; 
-const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQ5N3BIxn4STgZAoZCql4jIwZCUzmBDEY69cNY479xyVcKZAMiNNoNqHdZB8iRbDZCtyUq2dNmah4nZBHde5qCHxNdu2NZC0tSIAcAyksTZAJSucLCYWbKMY5y00eR7ZBzZCJy9THCMxJiOWYRmQX565bZBpYqAKqD1JLGZAGumsVokNYvu2Q8NKyO6w4m6wSEd2cC086QXdZC4ZBaRgSw2TwWVcUZCTEMKfzum6MThLkbGDB";
+const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQygjIY5oUyehJYVpo3OYyYwY9NZAwG96qJvW1PW0VqN3WsfrcjTuwgHTe5Ak2EwfPVCTuJNAEa4NhghRi3wvTzDPYgsOC8M5wxdHpF6o3r4uuklPQQKMjFDpXCZCoJI0cvRrLp6BxKPSXckE3tZA5t8UdKm6ZCOuOsAkEJqYa8KJhEOKMQCOm3MUz7ZB4U60nVXWcyq1DymBYnBjBPKZBZCqGNNAbgAQvlWZAOWFF3eRN6HYsbuG4uRtLkJ7QDMpMIfZBLqeWqKU2ZC1wm82O5YvpvJQZDZD";
 
 const privateKeyInput = process.env.PRIVATE_KEY || "";
 const formattedKey = privateKeyInput.includes("BEGIN PRIVATE KEY")
@@ -46,12 +46,17 @@ app.post("/", async (req, res) => {
     const decryptedPayload = JSON.parse(decrypted);
     const { action, data } = decryptedPayload;
 
+    // Handle the final completion signal
     if (action === "complete") {
       const finalResponse = { version: "3.0", data: { acknowledged: true } };
+
       try {
         const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
         const groupLink = linkRes.data?.Data?.GroupLink || "Link not found";
+        
+        // Extract recipient from the top-level decrypted payload
         const recipient = decryptedPayload.phone_number || data.phone_number;
+        
         if (recipient) {
           await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
             messaging_product: "whatsapp",
@@ -60,14 +65,22 @@ app.post("/", async (req, res) => {
             text: { body: `Here is your ABTYP WhatsApp Group Link: ${groupLink}` }
           }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
         }
-      } catch (e) { console.error("Message error:", e.message); }
+      } catch (e) {
+        console.error("Async error in completion processing:", e.message);
+      }
 
+      // Return encrypted acknowledgement to Meta
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
       const encrypted = Buffer.concat([cipher.update(JSON.stringify(finalResponse), "utf8"), cipher.final()]);
       return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
     }
 
-    let responseData = { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false, is_submit_enabled: false };
+    // Dropdown refresh logic
+    let responseData = {
+      country_list: [], state_list: [], parishad_list: [],
+      is_state_enabled: false, is_parishad_enabled: false, is_submit_enabled: false
+    };
+
     const countryRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
     responseData.country_list = mapList(countryRes.data?.Data);
 
@@ -81,14 +94,20 @@ app.post("/", async (req, res) => {
       responseData.parishad_list = mapList(parishadRes.data?.Data);
       responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
     }
-    if (data.parishad_id) responseData.is_submit_enabled = true;
+    // Check for parishad selection to enable the button
+    if (data.parishad_id || data.parishad) {
+      responseData.is_submit_enabled = true;
+    }
 
     const flowResponse = { version: "3.0", screen: "LOCATION_SCREEN", data: responseData };
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
     const encrypted = Buffer.concat([cipher.update(JSON.stringify(flowResponse), "utf8"), cipher.final()]);
     return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
 
-  } catch (err) { return res.status(500).send("Error"); }
+  } catch (err) {
+    console.error("SERVER ERROR:", err.message);
+    return res.status(500).send("Error");
+  }
 });
 
 app.listen(process.env.PORT || 3000, () => console.log("Server Running"));
