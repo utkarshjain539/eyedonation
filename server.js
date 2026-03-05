@@ -40,27 +40,22 @@ app.post("/", async (req, res) => {
     
     const { action, data } = JSON.parse(decrypted);
 
-    console.log("--- INCOMING DATA ---", JSON.stringify(data, null, 2));
+    // Initial response structure
+    let flowResponse = {
+      version: "3.0",
+      screen: "LOCATION_SCREEN",
+      data: {}
+    };
 
-    let flowResponse = { version: "3.0", data: {} };
-
-    // ACTION: Handle final button click
     if (data && data.action === "submit") {
-      console.log("SUBMIT DETECTED: Fetching WhatsApp Link...");
-      
-      const linkRes = await axios.get(
-        `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, 
-        { headers: ABTYP_HEADERS }
-      );
-      
+      // NAVIGATE TO SUCCESS SCREEN
+      const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
       const finalLink = linkRes.data?.Data?.GroupLink || "Link not found";
 
-      // IMPORTANT: Navigate to SUCCESS_SCREEN to fix the 'stuck' issue
-      flowResponse.screen = "SUCCESS_SCREEN"; 
+      flowResponse.screen = "SUCCESS_SCREEN";
       flowResponse.data = { whatsapp_link: finalLink };
-
     } else {
-      console.log("REFRESHING DROPDOWNS: Staying on LOCATION_SCREEN...");
+      // HANDLE DROPDOWNS ON LOCATION_SCREEN
       let responseData = {
         country_list: [], state_list: [], parishad_list: [],
         is_state_enabled: false, is_parishad_enabled: false, is_submit_enabled: false
@@ -81,17 +76,14 @@ app.post("/", async (req, res) => {
         responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
       }
 
-      // Check for parishad_id or the original parishad key from the form
-      if (data && (data.parishad_id || data.parishad)) {
+      if (data && data.parishad_id) {
         responseData.is_submit_enabled = true;
       }
 
-      flowResponse.screen = "LOCATION_SCREEN";
       flowResponse.data = responseData;
     }
 
-    console.log("--- OUTGOING RESPONSE ---", JSON.stringify(flowResponse, null, 2));
-
+    // Encrypt and Send
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
     const encrypted = Buffer.concat([cipher.update(JSON.stringify(flowResponse), "utf8"), cipher.final()]);
     return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
