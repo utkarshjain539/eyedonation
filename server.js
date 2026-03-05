@@ -23,22 +23,19 @@ const mapList = (arr) => (arr || []).map((item) => ({
   title: item.Name
 }));
 
-app.get("/", (req, res) => res.send("Server Alive"));
+app.get("/", (req, res) => res.send("ABTYP Flow Server is Active"));
 
 app.post("/", async (req, res) => {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector, authentication_tag } = req.body;
   if (!encrypted_aes_key) return res.status(200).send("OK");
 
-  let aesKey, responseIv;
-
   try {
-    // --- DECRYPTION ---
-    aesKey = crypto.privateDecrypt(
+    const aesKey = crypto.privateDecrypt(
       { key: formattedKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
       Buffer.from(encrypted_aes_key, "base64")
     );
     const requestIv = Buffer.from(initial_vector, "base64");
-    responseIv = Buffer.alloc(requestIv.length);
+    const responseIv = Buffer.alloc(requestIv.length);
     for (let i = 0; i < requestIv.length; i++) responseIv[i] = ~requestIv[i];
 
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
@@ -49,71 +46,63 @@ app.post("/", async (req, res) => {
     const decryptedPayload = JSON.parse(decrypted);
     const { action, data } = decryptedPayload;
 
-    let flowResponse = { version: "3.0", data: {} };
-
-    // --- 1. HANDLE COMPLETE ---
+    // --- HANDLE COMPLETION ---
     if (action === "complete") {
-      flowResponse.data = { acknowledged: true };
-      
-      // Background processing: doesn't block the response
+      const finalResponse = { version: "3.0", data: { acknowledged: true } };
       try {
-        if (data && data.parishad_id) {
-          const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
-          const groupLink = linkRes.data?.Data?.GroupLink || "Link not found";
-          const recipient = decryptedPayload.phone_number || data.phone_number;
-          
-          if (recipient) {
-            await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
-              messaging_product: "whatsapp",
-              to: recipient,
-              type: "text",
-              text: { body: `Here is your ABTYP WhatsApp Group Link: ${groupLink}` }
-            }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
-          }
+        const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
+        const groupLink = linkRes.data?.Data?.GroupLink || "Link not found";
+        const recipient = decryptedPayload.phone_number || data.phone_number;
+        
+        if (recipient) {
+          await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
+            messaging_product: "whatsapp",
+            to: recipient,
+            type: "text",
+            text: { body: `Here is your ABTYP WhatsApp Group Link: ${groupLink}` }
+          }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
         }
-      } catch (e) { console.error("Completion Error:", e.message); }
-    } 
-    // --- 2. HANDLE DROPDOWNS ---
-    else {
-      flowResponse.screen = "LOCATION_SCREEN";
-      let responseData = {
-        country_list: [], state_list: [], parishad_list: [],
-        is_state_enabled: false, is_parishad_enabled: false, is_submit_enabled: false
-      };
+      } catch (e) { console.error("Async error:", e.message); }
 
-      try {
-        const countryRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
-        responseData.country_list = mapList(countryRes.data?.Data);
-
-        if (data && data.country_id) {
-          const stateRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
-          responseData.state_list = mapList(stateRes.data?.Data);
-          responseData.is_state_enabled = responseData.state_list.length > 0;
-        }
-
-        if (data && data.state_id) {
-          const parishadRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
-          responseData.parishad_list = mapList(parishadRes.data?.Data);
-          responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
-        }
-
-        if (data && (data.parishad_id || data.parishad)) {
-          responseData.is_submit_enabled = true;
-        }
-      } catch (e) { console.error("Dropdown Data Error:", e.message); }
-      
-      flowResponse.data = responseData;
+      const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
+      const encrypted = Buffer.concat([cipher.update(JSON.stringify(finalResponse), "utf8"), cipher.final()]);
+      return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
     }
 
-    // --- ENCRYPTION (Must happen for ALL responses) ---
+    // --- HANDLE DATA EXCHANGE (REFRESH) ---
+    let responseData = {
+      country_list: [], state_list: [], parishad_list: [],
+      is_state_enabled: false, is_parishad_enabled: false, is_submit_enabled: false
+    };
+
+    const countryRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
+    responseData.country_list = mapList(countryRes.data?.Data);
+
+    if (data.country_id) {
+      const stateRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
+      responseData.state_list = mapList(stateRes.data?.Data);
+      responseData.is_state_enabled = responseData.state_list.length > 0;
+    }
+    if (data.state_id) {
+      const parishadRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
+      responseData.parishad_list = mapList(parishadRes.data?.Data);
+      responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
+    }
+    if (data.parishad_id) responseData.is_submit_enabled = true;
+
+    // IMPORTANT: Response must include the screen ID
+    const flowResponse = { 
+      version: "3.0", 
+      screen: "LOCATION_SCREEN", 
+      data: responseData 
+    };
+
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
     const encrypted = Buffer.concat([cipher.update(JSON.stringify(flowResponse), "utf8"), cipher.final()]);
     return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
 
   } catch (err) {
-    console.error("CRITICAL ERROR:", err.message);
-    // If decryption fails or server crashes, we can't send an encrypted response
-    return res.status(500).send("Critical Decryption Failure");
+    return res.status(500).send("Error");
   }
 });
 
