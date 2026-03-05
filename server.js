@@ -5,7 +5,6 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
-/* ================= CONFIG ================= */
 const ABTYP_HEADERS = {
   "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%",
   "Content-Type": "application/json"
@@ -21,13 +20,11 @@ const mapList = (arr) => (arr || []).map((item) => ({
   title: item.Name
 }));
 
-/* ================= FLOW HANDLER ================= */
 app.post("/", async (req, res) => {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector, authentication_tag } = req.body;
   if (!encrypted_aes_key) return res.status(200).send("OK");
 
   try {
-    /* --- DECRYPTION --- */
     const aesKey = crypto.privateDecrypt(
       { key: formattedKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
       Buffer.from(encrypted_aes_key, "base64")
@@ -46,26 +43,24 @@ app.post("/", async (req, res) => {
     console.log("-----------------------------------------");
     console.log("DATA RECEIVED:", JSON.stringify(data, null, 2));
 
-    if (action === "ping") {
-      const pingResponse = { data: { status: "active" } };
-      const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
-      const encrypted = Buffer.concat([cipher.update(JSON.stringify(pingResponse), "utf8"), cipher.final()]);
-      return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
-    }
-
-    /* --- NAVIGATION LOGIC --- */
     let flowResponse = { version: "3.0", data: {} };
 
-    // Check if user clicked the "Get Group Link" button
+    // --- LOGIC TO FETCH WHATSAPP LINK API ---
     if (data && data.action === "submit") {
-      console.log("MOVING TO SUCCESS_SCREEN");
-      const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
+      console.log("ACTION: SUBMIT DETECTED. FETCHING LINK...");
+      
+      const linkRes = await axios.get(
+        `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, 
+        { headers: ABTYP_HEADERS }
+      );
+      
       const finalLink = linkRes.data?.Data?.GroupLink || "Link not found";
 
-      flowResponse.screen = "SUCCESS_SCREEN"; // Instructs Flow to change screens
+      flowResponse.screen = "SUCCESS_SCREEN"; // Navigates forward
       flowResponse.data = { whatsapp_link: finalLink };
+
     } else {
-      console.log("REFRESHING LOCATION_SCREEN");
+      console.log("ACTION: REFRESHING DROPDOWNS...");
       let responseData = {
         country_list: [], state_list: [], parishad_list: [],
         is_state_enabled: false, is_parishad_enabled: false, is_submit_enabled: false
@@ -86,7 +81,7 @@ app.post("/", async (req, res) => {
         responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
       }
 
-      if (data && (data.parishad_id || data.parishad)) {
+      if (data && data.parishad_id) {
         responseData.is_submit_enabled = true;
       }
 
@@ -96,7 +91,6 @@ app.post("/", async (req, res) => {
 
     console.log("SENDING RESPONSE:", JSON.stringify(flowResponse, null, 2));
 
-    /* --- ENCRYPTION --- */
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
     const encrypted = Buffer.concat([cipher.update(JSON.stringify(flowResponse), "utf8"), cipher.final()]);
     return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
