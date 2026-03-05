@@ -95,7 +95,46 @@ app.post("/", async (req, res) => {
       responseData.whatsapp_link = link;
       responseData.is_link_visible = link.length > 0;
     }
+/* --- 5. HANDLE FINAL SUBMISSION --- */
+if (data.action === "submit_and_send_msg") {
+    
+    // 1. Get the link
+    const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
+    const groupLink = linkRes.data?.Data?.GroupLink || "No link found";
 
+    // 2. SEND THE WHATSAPP MESSAGE
+    // Note: You need your WHATSAPP_TOKEN and PHONE_NUMBER_ID from Meta Dashboard
+    try {
+        await axios.post(
+            `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`,
+            {
+                messaging_product: "whatsapp",
+                to: req.body.phone_number || data.phone_number, // The Flow automatically provides the user's phone number in some configurations
+                type: "text",
+                text: {
+                    body: `Thank you for joining ABTYP! \n\nHere is your requested WhatsApp Group Link: ${groupLink}`
+                }
+            },
+            { headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` } }
+        );
+    } catch (msgErr) {
+        console.error("Error sending WhatsApp Message:", msgErr.response?.data || msgErr.message);
+    }
+
+    // 3. Tell the flow to close
+    const finalResponse = {
+        version: "3.0",
+        action: "complete", // This closes the flow on the user's phone
+        payload: {
+            status: "success",
+            message: "Link sent to your WhatsApp!"
+        }
+    };
+
+    const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
+    const encrypted = Buffer.concat([cipher.update(JSON.stringify(finalResponse), "utf8"), cipher.final()]);
+    return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
+}
     const flowResponse = { version: "3.0", screen: "LOCATION_SCREEN", data: responseData };
     console.log("RESPONSE DATA:", JSON.stringify(responseData));
 
