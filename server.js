@@ -23,7 +23,7 @@ const mapList = (arr) => (arr || []).map((item) => ({
   title: item.Name
 }));
 
-app.get("/", (req, res) => res.send("ABTYP Flow Server is Active"));
+app.get("/", (req, res) => res.send("Server Alive"));
 
 app.post("/", async (req, res) => {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector, authentication_tag } = req.body;
@@ -32,7 +32,7 @@ app.post("/", async (req, res) => {
   let aesKey, responseIv;
 
   try {
-    /* --- DECRYPTION --- */
+    // --- DECRYPTION ---
     aesKey = crypto.privateDecrypt(
       { key: formattedKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
       Buffer.from(encrypted_aes_key, "base64")
@@ -49,13 +49,15 @@ app.post("/", async (req, res) => {
     const decryptedPayload = JSON.parse(decrypted);
     const { action, data } = decryptedPayload;
 
-    /* --- 1. HANDLE COMPLETE (FINAL BUTTON CLICK) --- */
-    if (action === "complete") {
-      const finalResponse = { version: "3.0", data: { acknowledged: true } };
+    let flowResponse = { version: "3.0", data: {} };
 
-      // Shielded background task so errors don't trigger a 500 response
+    // --- 1. HANDLE COMPLETE ---
+    if (action === "complete") {
+      flowResponse.data = { acknowledged: true };
+      
+      // Background processing: doesn't block the response
       try {
-        if (data.parishad_id) {
+        if (data && data.parishad_id) {
           const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
           const groupLink = linkRes.data?.Data?.GroupLink || "Link not found";
           const recipient = decryptedPayload.phone_number || data.phone_number;
@@ -69,44 +71,49 @@ app.post("/", async (req, res) => {
             }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
           }
         }
-      } catch (e) { console.error("Message Processing Error:", e.message); }
+      } catch (e) { console.error("Completion Error:", e.message); }
+    } 
+    // --- 2. HANDLE DROPDOWNS ---
+    else {
+      flowResponse.screen = "LOCATION_SCREEN";
+      let responseData = {
+        country_list: [], state_list: [], parishad_list: [],
+        is_state_enabled: false, is_parishad_enabled: false, is_submit_enabled: false
+      };
 
-      // Encrypt and return 200 OK
-      const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
-      const encrypted = Buffer.concat([cipher.update(JSON.stringify(finalResponse), "utf8"), cipher.final()]);
-      return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
+      try {
+        const countryRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
+        responseData.country_list = mapList(countryRes.data?.Data);
+
+        if (data && data.country_id) {
+          const stateRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
+          responseData.state_list = mapList(stateRes.data?.Data);
+          responseData.is_state_enabled = responseData.state_list.length > 0;
+        }
+
+        if (data && data.state_id) {
+          const parishadRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
+          responseData.parishad_list = mapList(parishadRes.data?.Data);
+          responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
+        }
+
+        if (data && (data.parishad_id || data.parishad)) {
+          responseData.is_submit_enabled = true;
+        }
+      } catch (e) { console.error("Dropdown Data Error:", e.message); }
+      
+      flowResponse.data = responseData;
     }
 
-    /* --- 2. DROPDOWN LOGIC (DATA_EXCHANGE) --- */
-    let responseData = {
-      country_list: [], state_list: [], parishad_list: [],
-      is_state_enabled: false, is_parishad_enabled: false, is_submit_enabled: false
-    };
-
-    const countryRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
-    responseData.country_list = mapList(countryRes.data?.Data);
-
-    if (data.country_id) {
-      const stateRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
-      responseData.state_list = mapList(stateRes.data?.Data);
-      responseData.is_state_enabled = responseData.state_list.length > 0;
-    }
-    if (data.state_id) {
-      const parishadRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
-      responseData.parishad_list = mapList(parishadRes.data?.Data);
-      responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
-    }
-    if (data.parishad_id) responseData.is_submit_enabled = true;
-
-    const flowResponse = { version: "3.0", screen: "LOCATION_SCREEN", data: responseData };
+    // --- ENCRYPTION (Must happen for ALL responses) ---
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
     const encrypted = Buffer.concat([cipher.update(JSON.stringify(flowResponse), "utf8"), cipher.final()]);
     return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
 
   } catch (err) {
-    console.error("CRITICAL SERVER ERROR:", err.message);
-    // Even on error, try to return a 200 OK to Meta if keys were decrypted
-    return res.status(200).send("Internal Server Error acknowledged");
+    console.error("CRITICAL ERROR:", err.message);
+    // If decryption fails or server crashes, we can't send an encrypted response
+    return res.status(500).send("Critical Decryption Failure");
   }
 });
 
