@@ -7,21 +7,16 @@ app.use(express.json());
 
 /* ================= CONFIG ================= */
 
-// Your API configuration
 const ABTYP_HEADERS = {
   "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%",
   "Content-Type": "application/json"
 };
 
-// RSA Private Key handling
 const privateKeyInput = process.env.PRIVATE_KEY || "";
 const formattedKey = privateKeyInput.includes("BEGIN PRIVATE KEY")
   ? privateKeyInput.replace(/\\n/g, "\n")
   : `-----BEGIN PRIVATE KEY-----\n${privateKeyInput}\n-----END PRIVATE KEY-----`;
 
-/**
- * Helper to map API response to WhatsApp Dropdown format
- */
 const mapList = (arr) =>
   (arr || []).map((item) => ({
     id: item.Id.toString(),
@@ -39,7 +34,6 @@ app.get("/", (req, res) => {
 app.post("/", async (req, res) => {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector, authentication_tag } = req.body;
 
-  // Health check/Ping from WhatsApp
   if (!encrypted_aes_key) return res.status(200).send("OK");
 
   try {
@@ -67,7 +61,7 @@ app.post("/", async (req, res) => {
     const decrypted = decipher.update(authentication_tag ? flowBuffer : flowBuffer.slice(0, -16), "binary", "utf8") + decipher.final("utf8");
     const { action, data } = JSON.parse(decrypted);
 
-    console.log("INCOMING:", action, data);
+    console.log("INCOMING DATA:", data);
 
     /* --- 3. PING ACTION --- */
     if (action === "ping") {
@@ -79,7 +73,6 @@ app.post("/", async (req, res) => {
 
     /* --- 4. DATA FETCHING LOGIC --- */
     
-    // Default response structure
     let responseData = {
       country_list: [],
       state_list: [],
@@ -90,30 +83,30 @@ app.post("/", async (req, res) => {
       is_link_visible: false
     };
 
-    // Capture IDs from payload (matching the updated Flow JSON keys)
-    const countryId = data.selected_country || data.country;
-    const stateId = data.selected_state || data.state;
-    const parishadId = data.selected_parishad || data.parishad;
+    // The form data is automatically sent under the component 'name' keys
+    const countryId = data.country;
+    const stateId = data.state;
+    const parishadId = data.parishad;
 
-    // Step A: Always fetch Countries
+    // A. Countries
     const countryRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
     responseData.country_list = mapList(countryRes.data?.Data);
 
-    // Step B: Fetch States if Country is selected
+    // B. States
     if (countryId) {
       const stateRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${countryId}`, { headers: ABTYP_HEADERS });
       responseData.state_list = mapList(stateRes.data?.Data);
       responseData.is_state_enabled = responseData.state_list.length > 0;
     }
 
-    // Step C: Fetch Parishads if State is selected
+    // C. Parishads
     if (stateId) {
       const parishadRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${stateId}`, { headers: ABTYP_HEADERS });
       responseData.parishad_list = mapList(parishadRes.data?.Data);
       responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
     }
 
-    // Step D: Fetch Final Link if Parishad is selected
+    // D. WhatsApp Link
     if (parishadId) {
       const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${parishadId}`, { headers: ABTYP_HEADERS });
       const link = linkRes.data?.Data?.GroupLink || "";
@@ -127,7 +120,7 @@ app.post("/", async (req, res) => {
       data: responseData
     };
 
-    /* --- 5. ENCRYPT & SEND RESPONSE --- */
+    /* --- 5. ENCRYPT RESPONSE --- */
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
     const encrypted = Buffer.concat([cipher.update(JSON.stringify(flowResponse), "utf8"), cipher.final()]);
 
@@ -136,14 +129,10 @@ app.post("/", async (req, res) => {
     );
 
   } catch (err) {
-    console.error("SERVER ERROR:", err.message);
-    // Even on error, return a valid 200 status but log the issue
-    return res.status(500).send("Internal Server Error");
+    console.error("ERROR:", err.message);
+    return res.status(500).send("Server Error");
   }
 });
 
-/* ================= START ================= */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`ABTYP Flow Server is live on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server live on ${PORT}`));
