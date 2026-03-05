@@ -46,15 +46,16 @@ app.post("/", async (req, res) => {
     const decryptedPayload = JSON.parse(decrypted);
     const { action, data } = decryptedPayload;
 
-    console.log("ACTION:", action);
-
-    // 1. HANDLE COMPLETION (SEND LINK AS MESSAGE)
+    // --- HANDLE COMPLETION ---
     if (action === "complete") {
-      const finalResponse = { version: "3.0", data: { acknowledged: true } };
+      // Create a valid Flow Response object
+      const finalResponse = { version: "3.0", data: { status: "success" } };
 
       try {
         const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
         const groupLink = linkRes.data?.Data?.GroupLink || "Link not found";
+        
+        // Recipient from payload or metadata
         const recipient = decryptedPayload.phone_number || data.phone_number;
         
         if (recipient) {
@@ -65,15 +66,17 @@ app.post("/", async (req, res) => {
             text: { body: `Here is your ABTYP WhatsApp Group Link: ${groupLink}` }
           }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
         }
-      } catch (e) { console.error("Async Error:", e.message); }
+      } catch (e) {
+        console.error("Async Message Error:", e.message);
+      }
 
-      // ENCRYPT ACKNOWLEDGEMENT
+      // ENCRYPT THE RESPONSE (Fixes "Failed to receive expected HTTP response")
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
       const encrypted = Buffer.concat([cipher.update(JSON.stringify(finalResponse), "utf8"), cipher.final()]);
       return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
     }
 
-    // 2. DROPDOWN LOGIC
+    // --- DROPDOWN LOGIC ---
     let responseData = {
       country_list: [], state_list: [], parishad_list: [],
       is_state_enabled: false, is_parishad_enabled: false, is_submit_enabled: false
@@ -100,6 +103,7 @@ app.post("/", async (req, res) => {
     return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
 
   } catch (err) {
+    console.error("SERVER ERROR:", err.message);
     return res.status(500).send("Error");
   }
 });
