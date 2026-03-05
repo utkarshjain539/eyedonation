@@ -23,7 +23,7 @@ const mapList = (arr) => (arr || []).map((item) => ({
   title: item.Name
 }));
 
-app.get("/", (req, res) => res.send("ABTYP Flow Server is Running"));
+app.get("/", (req, res) => res.send("ABTYP Server Running"));
 
 app.post("/", async (req, res) => {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector, authentication_tag } = req.body;
@@ -46,16 +46,14 @@ app.post("/", async (req, res) => {
     const decryptedPayload = JSON.parse(decrypted);
     const { action, data } = decryptedPayload;
 
-    // --- HANDLE COMPLETION ---
+    // --- 1. HANDLE COMPLETION ---
     if (action === "complete") {
-      // Create a valid Flow Response object
-      const finalResponse = { version: "3.0", data: { status: "success" } };
+      const finalResponse = { version: "3.0", data: { acknowledged: true } };
 
+      // Background task: Get link and send message
       try {
         const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
         const groupLink = linkRes.data?.Data?.GroupLink || "Link not found";
-        
-        // Recipient from payload or metadata
         const recipient = decryptedPayload.phone_number || data.phone_number;
         
         if (recipient) {
@@ -67,16 +65,16 @@ app.post("/", async (req, res) => {
           }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
         }
       } catch (e) {
-        console.error("Async Message Error:", e.message);
+        console.error("Message send error:", e.message);
       }
 
-      // ENCRYPT THE RESPONSE (Fixes "Failed to receive expected HTTP response")
+      // Return encrypted acknowledgement
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
       const encrypted = Buffer.concat([cipher.update(JSON.stringify(finalResponse), "utf8"), cipher.final()]);
       return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
     }
 
-    // --- DROPDOWN LOGIC ---
+    // --- 2. DROPDOWN LOGIC ---
     let responseData = {
       country_list: [], state_list: [], parishad_list: [],
       is_state_enabled: false, is_parishad_enabled: false, is_submit_enabled: false
@@ -103,7 +101,6 @@ app.post("/", async (req, res) => {
     return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
 
   } catch (err) {
-    console.error("SERVER ERROR:", err.message);
     return res.status(500).send("Error");
   }
 });
