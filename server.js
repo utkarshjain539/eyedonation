@@ -43,29 +43,29 @@ app.post("/", async (req, res) => {
     
     const { action, data } = JSON.parse(decrypted);
 
-    // --- DEBUG LOGS ---
     console.log("-----------------------------------------");
-    console.log("ACTION RECEIVED:", action);
     console.log("DATA RECEIVED:", JSON.stringify(data, null, 2));
 
     if (action === "ping") {
+      const pingResponse = { data: { status: "active" } };
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
-      const encrypted = Buffer.concat([cipher.update(JSON.stringify({ data: { status: "active" } }), "utf8"), cipher.final()]);
+      const encrypted = Buffer.concat([cipher.update(JSON.stringify(pingResponse), "utf8"), cipher.final()]);
       return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
     }
 
-    /* --- RESPONSE LOGIC --- */
+    /* --- NAVIGATION LOGIC --- */
     let flowResponse = { version: "3.0", data: {} };
 
+    // Check if user clicked the "Get Group Link" button
     if (data && data.action === "submit") {
-      console.log("PROCESSING SUBMIT ACTION...");
+      console.log("MOVING TO SUCCESS_SCREEN");
       const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
       const finalLink = linkRes.data?.Data?.GroupLink || "Link not found";
 
-      flowResponse.screen = "SUCCESS_SCREEN"; // Instructs navigation
+      flowResponse.screen = "SUCCESS_SCREEN"; // Instructs Flow to change screens
       flowResponse.data = { whatsapp_link: finalLink };
     } else {
-      console.log("FETCHING DROPDOWN DATA...");
+      console.log("REFRESHING LOCATION_SCREEN");
       let responseData = {
         country_list: [], state_list: [], parishad_list: [],
         is_state_enabled: false, is_parishad_enabled: false, is_submit_enabled: false
@@ -86,7 +86,7 @@ app.post("/", async (req, res) => {
         responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
       }
 
-      if (data && data.parishad_id) {
+      if (data && (data.parishad_id || data.parishad)) {
         responseData.is_submit_enabled = true;
       }
 
@@ -95,7 +95,6 @@ app.post("/", async (req, res) => {
     }
 
     console.log("SENDING RESPONSE:", JSON.stringify(flowResponse, null, 2));
-    console.log("-----------------------------------------");
 
     /* --- ENCRYPTION --- */
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
@@ -103,7 +102,7 @@ app.post("/", async (req, res) => {
     return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
 
   } catch (err) {
-    console.error("!!! SERVER ERROR !!!", err.message);
+    console.error("SERVER ERROR:", err.message);
     return res.status(500).send("Server Error");
   }
 });
