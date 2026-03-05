@@ -5,6 +5,8 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
+/* ================= CONFIG ================= */
+
 const ABTYP_HEADERS = {
   "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%",
   "Content-Type": "application/json"
@@ -22,6 +24,14 @@ const mapList = (arr) =>
     title: item.Name
   }));
 
+/* ================= ROOT ================= */
+
+app.get("/", (req, res) => {
+  res.send("ABTYP WhatsApp Flow Server Running");
+});
+
+/* ================= FLOW HANDLER ================= */
+
 app.post("/", async (req, res) => {
 
   const { encrypted_aes_key, encrypted_flow_data, initial_vector, authentication_tag } = req.body;
@@ -31,6 +41,8 @@ app.post("/", async (req, res) => {
   }
 
   try {
+
+    /* RSA DECRYPT */
 
     const aesKey = crypto.privateDecrypt(
       {
@@ -47,6 +59,8 @@ app.post("/", async (req, res) => {
     for (let i = 0; i < requestIv.length; i++) {
       responseIv[i] = ~requestIv[i];
     }
+
+    /* AES DECRYPT */
 
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
     const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
@@ -66,11 +80,17 @@ app.post("/", async (req, res) => {
 
     const { action, data } = JSON.parse(decrypted);
 
-    /* PING */
+    console.log("FLOW DATA:", action, data);
+
+    /* ================= PING ================= */
 
     if (action === "ping") {
 
-      const pingResponse = { data: { status: "active" } };
+      const pingResponse = {
+        data: {
+          status: "active"
+        }
+      };
 
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
 
@@ -84,6 +104,8 @@ app.post("/", async (req, res) => {
       );
     }
 
+    /* ================= RESPONSE TEMPLATE ================= */
+
     let response = {
       version: "3.0",
       screen: "LOCATION_SCREEN",
@@ -94,7 +116,7 @@ app.post("/", async (req, res) => {
       }
     };
 
-    /* INIT */
+    /* ================= INIT ================= */
 
     if (action === "INIT") {
 
@@ -106,45 +128,82 @@ app.post("/", async (req, res) => {
       response.data.country_list = mapList(countryRes.data?.Data);
     }
 
-    /* COUNTRY SELECTED */
+    /* ================= COUNTRY SELECTED ================= */
 
     else if (data.country && !data.state) {
 
-      const [countryRes, stateRes] = await Promise.all([
-        axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS }),
-        axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country}`, { headers: ABTYP_HEADERS })
-      ]);
+      const countryRes = await axios.get(
+        "https://api.abtyp.org/v0/country",
+        { headers: ABTYP_HEADERS }
+      );
+
+      const stateRes = await axios.get(
+        `https://api.abtyp.org/v0/state?CountryId=${data.country}`,
+        { headers: ABTYP_HEADERS }
+      );
 
       response.data.country_list = mapList(countryRes.data?.Data);
       response.data.state_list = mapList(stateRes.data?.Data);
     }
 
-    /* STATE SELECTED */
+    /* ================= STATE SELECTED ================= */
 
-    else if (data.state && !data.parishad) {
+    else if (data.country && data.state && !data.parishad) {
 
-      const [countryRes, stateRes, parishadRes] = await Promise.all([
-        axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS }),
-        axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country}`, { headers: ABTYP_HEADERS }),
-        axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state}`, { headers: ABTYP_HEADERS })
-      ]);
+      const countryRes = await axios.get(
+        "https://api.abtyp.org/v0/country",
+        { headers: ABTYP_HEADERS }
+      );
+
+      const stateRes = await axios.get(
+        `https://api.abtyp.org/v0/state?CountryId=${data.country}`,
+        { headers: ABTYP_HEADERS }
+      );
+
+      const parishadRes = await axios.get(
+        `https://api.abtyp.org/v0/parishad?StateId=${data.state}`,
+        { headers: ABTYP_HEADERS }
+      );
 
       response.data.country_list = mapList(countryRes.data?.Data);
       response.data.state_list = mapList(stateRes.data?.Data);
       response.data.parishad_list = mapList(parishadRes.data?.Data);
     }
 
-    /* PARISHAD SELECTED */
+    /* ================= PARISHAD SELECTED ================= */
 
-    else if (data.parishad) {
+    else if (data.country && data.state && data.parishad) {
+
+      const countryRes = await axios.get(
+        "https://api.abtyp.org/v0/country",
+        { headers: ABTYP_HEADERS }
+      );
+
+      const stateRes = await axios.get(
+        `https://api.abtyp.org/v0/state?CountryId=${data.country}`,
+        { headers: ABTYP_HEADERS }
+      );
+
+      const parishadRes = await axios.get(
+        `https://api.abtyp.org/v0/parishad?StateId=${data.state}`,
+        { headers: ABTYP_HEADERS }
+      );
 
       const linkRes = await axios.get(
         `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad}`,
         { headers: ABTYP_HEADERS }
       );
 
+      response.data.country_list = mapList(countryRes.data?.Data);
+      response.data.state_list = mapList(stateRes.data?.Data);
+      response.data.parishad_list = mapList(parishadRes.data?.Data);
+
       response.data.whatsapp_link = linkRes.data?.Data?.GroupLink || "";
     }
+
+    console.log("FLOW RESPONSE:", response);
+
+    /* ================= ENCRYPT RESPONSE ================= */
 
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
 
@@ -159,12 +218,14 @@ app.post("/", async (req, res) => {
 
   } catch (err) {
 
-    console.error(err);
-    return res.status(500).send("Server Error");
+    console.error("SERVER ERROR:", err);
 
+    return res.status(500).send("Server Error");
   }
 
 });
+
+/* ================= START ================= */
 
 app.listen(process.env.PORT || 3000, () => {
   console.log("Server Running");
