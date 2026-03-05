@@ -33,17 +33,12 @@ app.get("/", (req, res) => {
 /* ================= FLOW HANDLER ================= */
 
 app.post("/", async (req, res) => {
-
   const { encrypted_aes_key, encrypted_flow_data, initial_vector, authentication_tag } = req.body;
 
-  if (!encrypted_aes_key) {
-    return res.status(200).send("OK");
-  }
+  if (!encrypted_aes_key) return res.status(200).send("OK");
 
   try {
-
     /* RSA DECRYPT */
-
     const aesKey = crypto.privateDecrypt(
       {
         key: formattedKey,
@@ -54,179 +49,90 @@ app.post("/", async (req, res) => {
     );
 
     const requestIv = Buffer.from(initial_vector, "base64");
-
     const responseIv = Buffer.alloc(requestIv.length);
     for (let i = 0; i < requestIv.length; i++) {
       responseIv[i] = ~requestIv[i];
     }
 
     /* AES DECRYPT */
-
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
     const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
+    decipher.setAuthTag(authentication_tag ? Buffer.from(authentication_tag, "base64") : flowBuffer.slice(-16));
 
-    decipher.setAuthTag(
-      authentication_tag
-        ? Buffer.from(authentication_tag, "base64")
-        : flowBuffer.slice(-16)
-    );
-
-    const decrypted =
-      decipher.update(
-        authentication_tag ? flowBuffer : flowBuffer.slice(0, -16),
-        "binary",
-        "utf8"
-      ) + decipher.final("utf8");
-
+    const decrypted = decipher.update(authentication_tag ? flowBuffer : flowBuffer.slice(0, -16), "binary", "utf8") + decipher.final("utf8");
     const { action, data } = JSON.parse(decrypted);
 
-    console.log("FLOW DATA:", action, data);
+    console.log("INCOMING ACTION:", action, "DATA:", data);
 
     /* ================= PING ================= */
-
     if (action === "ping") {
-
-      const pingResponse = {
-        data: {
-          status: "active"
-        }
-      };
-
+      const pingResponse = { data: { status: "active" } };
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
-
-      const encrypted = Buffer.concat([
-        cipher.update(JSON.stringify(pingResponse), "utf8"),
-        cipher.final()
-      ]);
-
-      return res.status(200).send(
-        Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64")
-      );
+      const encrypted = Buffer.concat([cipher.update(JSON.stringify(pingResponse), "utf8"), cipher.final()]);
+      return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
     }
 
-    /* ================= RESPONSE TEMPLATE ================= */
-
-    let response = {
-      version: "3.0",
-      screen: "LOCATION_SCREEN",
-      data: {
-        country_list: [],
-        state_list: [],
-        parishad_list: []
-      }
+    /* ================= DATA FETCHING LOGIC ================= */
+    
+    // Initialize default response structure
+    let responseData = {
+      country_list: [],
+      state_list: [],
+      parishad_list: [],
+      whatsapp_link: "",
+      is_state_enabled: false,
+      is_parishad_enabled: false,
+      is_link_visible: false
     };
 
-    /* ================= INIT ================= */
+    // 1. Always fetch Countries
+    const countryRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
+    responseData.country_list = mapList(countryRes.data?.Data);
 
-    if (action === "INIT") {
-
-      const countryRes = await axios.get(
-        "https://api.abtyp.org/v0/country",
-        { headers: ABTYP_HEADERS }
-      );
-
-      response.data.country_list = mapList(countryRes.data?.Data);
+    // 2. Fetch States if Country is selected
+    if (data.country) {
+      const stateRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country}`, { headers: ABTYP_HEADERS });
+      responseData.state_list = mapList(stateRes.data?.Data);
+      responseData.is_state_enabled = responseData.state_list.length > 0;
     }
 
-    /* ================= COUNTRY SELECTED ================= */
-
-    else if (data.country && !data.state) {
-
-      const countryRes = await axios.get(
-        "https://api.abtyp.org/v0/country",
-        { headers: ABTYP_HEADERS }
-      );
-
-      const stateRes = await axios.get(
-        `https://api.abtyp.org/v0/state?CountryId=${data.country}`,
-        { headers: ABTYP_HEADERS }
-      );
-
-      response.data.country_list = mapList(countryRes.data?.Data);
-      response.data.state_list = mapList(stateRes.data?.Data);
+    // 3. Fetch Parishads if State is selected
+    if (data.state) {
+      const parishadRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state}`, { headers: ABTYP_HEADERS });
+      responseData.parishad_list = mapList(parishadRes.data?.Data);
+      responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
     }
 
-    /* ================= STATE SELECTED ================= */
-
-    else if (data.country && data.state && !data.parishad) {
-
-      const countryRes = await axios.get(
-        "https://api.abtyp.org/v0/country",
-        { headers: ABTYP_HEADERS }
-      );
-
-      const stateRes = await axios.get(
-        `https://api.abtyp.org/v0/state?CountryId=${data.country}`,
-        { headers: ABTYP_HEADERS }
-      );
-
-      const parishadRes = await axios.get(
-        `https://api.abtyp.org/v0/parishad?StateId=${data.state}`,
-        { headers: ABTYP_HEADERS }
-      );
-
-      response.data.country_list = mapList(countryRes.data?.Data);
-      response.data.state_list = mapList(stateRes.data?.Data);
-      response.data.parishad_list = mapList(parishadRes.data?.Data);
+    // 4. Fetch Link if Parishad is selected
+    if (data.parishad) {
+      const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad}`, { headers: ABTYP_HEADERS });
+      const link = linkRes.data?.Data?.GroupLink || "";
+      responseData.whatsapp_link = link;
+      responseData.is_link_visible = link.length > 0;
     }
 
-    /* ================= PARISHAD SELECTED ================= */
-
-    else if (data.country && data.state && data.parishad) {
-
-      const countryRes = await axios.get(
-        "https://api.abtyp.org/v0/country",
-        { headers: ABTYP_HEADERS }
-      );
-
-      const stateRes = await axios.get(
-        `https://api.abtyp.org/v0/state?CountryId=${data.country}`,
-        { headers: ABTYP_HEADERS }
-      );
-
-      const parishadRes = await axios.get(
-        `https://api.abtyp.org/v0/parishad?StateId=${data.state}`,
-        { headers: ABTYP_HEADERS }
-      );
-
-      const linkRes = await axios.get(
-        `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad}`,
-        { headers: ABTYP_HEADERS }
-      );
-
-      response.data.country_list = mapList(countryRes.data?.Data);
-      response.data.state_list = mapList(stateRes.data?.Data);
-      response.data.parishad_list = mapList(parishadRes.data?.Data);
-
-      response.data.whatsapp_link = linkRes.data?.Data?.GroupLink || "";
-    }
-
-    console.log("FLOW RESPONSE:", response);
+    const flowResponse = {
+      version: "3.0",
+      screen: "LOCATION_SCREEN",
+      data: responseData
+    };
 
     /* ================= ENCRYPT RESPONSE ================= */
-
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
-
-    const encrypted = Buffer.concat([
-      cipher.update(JSON.stringify(response), "utf8"),
-      cipher.final()
-    ]);
+    const encrypted = Buffer.concat([cipher.update(JSON.stringify(flowResponse), "utf8"), cipher.final()]);
 
     return res.status(200).send(
       Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64")
     );
 
   } catch (err) {
-
-    console.error("SERVER ERROR:", err);
-
+    console.error("SERVER ERROR:", err.message);
     return res.status(500).send("Server Error");
   }
-
 });
 
 /* ================= START ================= */
-
-app.listen(process.env.PORT || 3000, () => {
-  console.log("Server Running");
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
