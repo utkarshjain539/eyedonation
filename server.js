@@ -64,7 +64,7 @@ app.post("/", async (req, res) => {
         "utf8"
       ) + decipher.final("utf8");
 
-    const { action, screen, data } = JSON.parse(decrypted);
+    const { action, data } = JSON.parse(decrypted);
 
     /* PING */
 
@@ -86,8 +86,12 @@ app.post("/", async (req, res) => {
 
     let response = {
       version: "3.0",
-      screen: "",
-      data: {}
+      screen: "LOCATION_SCREEN",
+      data: {
+        country_list: [],
+        state_list: [],
+        parishad_list: []
+      }
     };
 
     /* INIT */
@@ -99,41 +103,47 @@ app.post("/", async (req, res) => {
         { headers: ABTYP_HEADERS }
       );
 
-      response.screen = "COUNTRY_SCREEN";
       response.data.country_list = mapList(countryRes.data?.Data);
     }
 
-    else if (screen === "COUNTRY_SCREEN") {
+    /* COUNTRY SELECTED */
 
-      const stateRes = await axios.get(
-        `https://api.abtyp.org/v0/state?CountryId=${data.country}`,
-        { headers: ABTYP_HEADERS }
-      );
+    else if (data.country && !data.state) {
 
-      response.screen = "STATE_SCREEN";
+      const [countryRes, stateRes] = await Promise.all([
+        axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS }),
+        axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country}`, { headers: ABTYP_HEADERS })
+      ]);
+
+      response.data.country_list = mapList(countryRes.data?.Data);
       response.data.state_list = mapList(stateRes.data?.Data);
     }
 
-    else if (screen === "STATE_SCREEN") {
+    /* STATE SELECTED */
 
-      const parishadRes = await axios.get(
-        `https://api.abtyp.org/v0/parishad?StateId=${data.state}`,
-        { headers: ABTYP_HEADERS }
-      );
+    else if (data.state && !data.parishad) {
 
-      response.screen = "PARISHAD_SCREEN";
+      const [countryRes, stateRes, parishadRes] = await Promise.all([
+        axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS }),
+        axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country}`, { headers: ABTYP_HEADERS }),
+        axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state}`, { headers: ABTYP_HEADERS })
+      ]);
+
+      response.data.country_list = mapList(countryRes.data?.Data);
+      response.data.state_list = mapList(stateRes.data?.Data);
       response.data.parishad_list = mapList(parishadRes.data?.Data);
     }
 
-    else if (screen === "PARISHAD_SCREEN") {
+    /* PARISHAD SELECTED */
 
-      await axios.get(
+    else if (data.parishad) {
+
+      const linkRes = await axios.get(
         `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad}`,
         { headers: ABTYP_HEADERS }
       );
 
-      response.screen = "SUCCESS_SCREEN";
-      response.data = {};
+      response.data.whatsapp_link = linkRes.data?.Data?.GroupLink || "";
     }
 
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
