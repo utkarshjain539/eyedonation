@@ -10,36 +10,33 @@ const ABTYP_HEADERS = {
   "Content-Type": "application/json"
 };
 
-const PHONE_NUMBER_ID = "1049088024951885"; 
-const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQ5N3BIxn4STgZAoZCql4jIwZCUzmBDEY69cNY479xyVcKZAMiNNoNqHdZB8iRbDZCtyUq2dNmah4nZBHde5qCHxNdu2NZC0tSIAcAyksTZAJSucLCYWbKMY5y00eR7ZBzZCJy9THCMxJiOWYRmQX565bZBpYqAKqD1JLGZAGumsVokNYvu2Q8NKyO6w4m6wSEd2cC086QXdZC4ZBaRgSw2TwWVcUZCTEMKfzum6MThLkbGDB";
+const PHONE_NUMBER_ID = "1049088024951885";
+
+const WHATSAPP_TOKEN = "YOUR_WHATSAPP_TOKEN";
 
 const privateKeyInput = process.env.PRIVATE_KEY || "";
+
 const formattedKey = privateKeyInput.includes("BEGIN PRIVATE KEY")
   ? privateKeyInput.replace(/\\n/g, "\n")
   : `-----BEGIN PRIVATE KEY-----\n${privateKeyInput}\n-----END PRIVATE KEY-----`;
 
-const mapList = (arr) => (arr || []).map((item) => ({
-  id: item.Id.toString(),
-  title: item.Name
-}));
+const mapList = (arr) =>
+  (arr || []).map((item) => ({
+    id: item.Id.toString(),
+    title: item.Name
+  }));
 
-app.get("/", (req, res) => res.send("ABTYP Flow Server is Running"));
+app.get("/", (req, res) => {
+  res.send("ABTYP Flow Server Running");
+});
 
 app.post("/", async (req, res) => {
 
-  console.log("----------- NEW REQUEST -----------");
-  console.log("Raw Body:", JSON.stringify(req.body, null, 2));
-
   const { encrypted_aes_key, encrypted_flow_data, initial_vector, authentication_tag } = req.body;
 
-  if (!encrypted_aes_key) {
-    console.log("Health check request received");
-    return res.status(200).send("OK");
-  }
+  if (!encrypted_aes_key) return res.status(200).send("OK");
 
   try {
-
-    console.log("Decrypting AES key...");
 
     const aesKey = crypto.privateDecrypt(
       {
@@ -50,8 +47,6 @@ app.post("/", async (req, res) => {
       Buffer.from(encrypted_aes_key, "base64")
     );
 
-    console.log("AES Key decrypted");
-
     const requestIv = Buffer.from(initial_vector, "base64");
 
     const responseIv = Buffer.alloc(requestIv.length);
@@ -59,8 +54,6 @@ app.post("/", async (req, res) => {
     for (let i = 0; i < requestIv.length; i++) {
       responseIv[i] = ~requestIv[i];
     }
-
-    console.log("Decrypting flow data...");
 
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
 
@@ -79,15 +72,67 @@ app.post("/", async (req, res) => {
         "utf8"
       ) + decipher.final("utf8");
 
-    console.log("Decrypted Payload:", decrypted);
-
     const decryptedPayload = JSON.parse(decrypted);
 
     const action = decryptedPayload.action;
     const data = decryptedPayload.data || {};
 
-    console.log("Action:", action);
-    console.log("Data Received:", data);
+    if (action === "complete") {
+
+      const finalResponse = {
+        version: "3.0",
+        data: {
+          acknowledged: true
+        }
+      };
+
+      try {
+
+        const linkRes = await axios.get(
+          `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`,
+          { headers: ABTYP_HEADERS }
+        );
+
+        const groupLink = linkRes.data?.Data?.GroupLink || "Link not available";
+
+        const recipient = decryptedPayload.phone_number || data.phone_number;
+
+        if (recipient) {
+
+          await axios.post(
+            `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
+            {
+              messaging_product: "whatsapp",
+              to: recipient,
+              type: "text",
+              text: {
+                body: `Here is your ABTYP WhatsApp Group Link:\n${groupLink}`
+              }
+            },
+            {
+              headers: {
+                Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+                "Content-Type": "application/json"
+              }
+            }
+          );
+        }
+
+      } catch (e) {
+        console.error("Group link send error:", e.message);
+      }
+
+      const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
+
+      const encrypted = Buffer.concat([
+        cipher.update(JSON.stringify(finalResponse), "utf8"),
+        cipher.final()
+      ]);
+
+      return res
+        .status(200)
+        .send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
+    }
 
     let responseData = {
       country_list: [],
@@ -98,27 +143,19 @@ app.post("/", async (req, res) => {
       is_submit_enabled: false
     };
 
-    console.log("Fetching Countries...");
-
     const countryRes = await axios.get(
       "https://api.abtyp.org/v0/country",
       { headers: ABTYP_HEADERS }
     );
 
-    console.log("Country API Response:", countryRes.data);
-
     responseData.country_list = mapList(countryRes.data?.Data || []);
 
     if (data.country_id) {
-
-      console.log("Fetching States for Country:", data.country_id);
 
       const stateRes = await axios.get(
         `https://api.abtyp.org/v0/state?CountryId=${data.country_id}`,
         { headers: ABTYP_HEADERS }
       );
-
-      console.log("State API Response:", stateRes.data);
 
       responseData.state_list = mapList(stateRes.data?.Data || []);
 
@@ -127,14 +164,10 @@ app.post("/", async (req, res) => {
 
     if (data.state_id) {
 
-      console.log("Fetching Parishad for State:", data.state_id);
-
       const parishadRes = await axios.get(
         `https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`,
         { headers: ABTYP_HEADERS }
       );
-
-      console.log("Parishad API Response:", parishadRes.data);
 
       responseData.parishad_list = mapList(parishadRes.data?.Data || []);
 
@@ -142,7 +175,6 @@ app.post("/", async (req, res) => {
     }
 
     if (data.parishad_id) {
-      console.log("Parishad selected:", data.parishad_id);
       responseData.is_submit_enabled = true;
     }
 
@@ -151,8 +183,6 @@ app.post("/", async (req, res) => {
       screen: "LOCATION_SCREEN",
       data: responseData
     };
-
-    console.log("Sending Response to Flow:", JSON.stringify(flowResponse, null, 2));
 
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
 
@@ -167,10 +197,12 @@ app.post("/", async (req, res) => {
 
   } catch (err) {
 
-    console.error("❌ SERVER ERROR:");
-    console.error(err);
-    console.error(err.stack);
+    console.error("SERVER ERROR:", err);
 
     return res.status(500).send("Error");
   }
+});
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log("Server Running");
 });
