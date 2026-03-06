@@ -57,7 +57,7 @@ app.post("/", async (req, res) => {
 
     console.log(">>> GROUP LINK:", groupLink);
 
-    const recipient = decryptedPayload.user_id;
+    const recipient = '918488861504';
 
     console.log("USER NUMBER:", recipient);
 
