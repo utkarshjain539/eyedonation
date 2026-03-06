@@ -40,36 +40,66 @@ app.post("/", async (req, res) => {
     }
 
     if (action === "complete") {
-      console.log("--- STARTING COMPLETION ---");
-      const finalResponse = { version: "3.0", data: { acknowledged: true } };
+  console.log("--- STARTING COMPLETION ---");
 
-      try {
-        const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
-        const groupLink = linkRes.data?.Data?.WhatsAppGroupLink;
+  const finalResponse = { version: "3.0", data: { acknowledged: true } };
 
-        // LOGGING THE LINK
-        console.log(">>> SUCCESS: WhatsApp Group Link found:", groupLink);
-        
-        const recipient = decryptedPayload.phone_number || data.phone_number || decryptedPayload.user_id;
-        console.log("Resolved Recipient:", recipient);
+  try {
 
-        if (recipient && groupLink) {
-          await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
-            messaging_product: "whatsapp",
-            to: recipient.toString().replace('+', ''), 
-            type: "text",
-            text: { body: `Here is your ABTYP WhatsApp Group Link: ${groupLink}` }
-          }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
-          console.log("MESSAGE SENT SUCCESSFULLY");
+    const parishadId = data.parishad_id;
+
+    const linkRes = await axios.get(
+      `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${parishadId}`,
+      { headers: ABTYP_HEADERS }
+    );
+
+    const groupLink = linkRes.data?.Data?.WhatsAppGroupLink || null;
+
+    console.log(">>> GROUP LINK:", groupLink);
+
+    const recipient = decryptedPayload.user_id;
+
+    console.log("USER NUMBER:", recipient);
+
+    if (recipient && groupLink) {
+
+      await axios.post(
+        `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
+        {
+          messaging_product: "whatsapp",
+          to: recipient,
+          type: "text",
+          text: {
+            body: `Welcome to ABTYP 🙏\n\nHere is your Parishad WhatsApp Group Link:\n${groupLink}`
+          }
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+            "Content-Type": "application/json"
+          }
         }
-      } catch (e) {
-        console.error("COMPLETION ERROR:", e.response?.data || e.message);
-      }
+      );
 
-      const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
-      const encrypted = Buffer.concat([cipher.update(JSON.stringify(finalResponse), "utf8"), cipher.final()]);
-      return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
+      console.log("WHATSAPP MESSAGE SENT");
     }
+
+  } catch (error) {
+
+    console.error("COMPLETION ERROR:", error.response?.data || error.message);
+
+  }
+
+  const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
+  const encrypted = Buffer.concat([
+    cipher.update(JSON.stringify(finalResponse), "utf8"),
+    cipher.final()
+  ]);
+
+  return res.status(200).send(
+    Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64")
+  );
+}
 
     // Default Dropdown logic
     let responseData = { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false, is_submit_enabled: false };
