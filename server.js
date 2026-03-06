@@ -261,10 +261,60 @@ ${groupLink}`
 
     if (data.parishad_id) {
 
-      console.log("PARISHAD SELECTED:", data.parishad_id);
+  console.log("PARISHAD SELECTED:", data.parishad_id);
 
-      responseData.is_submit_enabled = true;
+  try {
+
+    const linkRes = await axios.get(
+      `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`,
+      { headers: ABTYP_HEADERS }
+    );
+
+    const groupLink = linkRes.data?.Data?.WhatsAppGroupLink;
+
+    const recipient =
+      decryptedPayload.user_id ||
+      decryptedPayload?.context?.user_id ||
+      "918488861504"; // fallback
+
+    console.log("RECIPIENT:", recipient);
+    console.log("GROUP LINK:", groupLink);
+
+    if (groupLink) {
+
+      await axios.post(
+        `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
+        {
+          messaging_product: "whatsapp",
+          to: recipient,
+          type: "text",
+          text: {
+            body: `Welcome to ABTYP 🙏
+
+Here is your Parishad WhatsApp Group Link:
+
+${groupLink}`
+          }
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+            "Content-Type": "application/json"
+          }
+        }
+      );
+
+      console.log("WHATSAPP MESSAGE SENT");
+
     }
+
+  } catch (error) {
+
+    console.error("WHATSAPP ERROR:", error.response?.data || error.message);
+
+  }
+
+}
 
     console.log("RESPONSE DATA:", responseData);
 
