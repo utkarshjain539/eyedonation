@@ -146,7 +146,7 @@ console.log("PARISHAD ID:", data.parishad_id);
 
         console.log("GROUP LINK:", groupLink);
 
-        const recipient = decryptedPayload.user_id;
+        const recipient = "918488861504";
 
         console.log("RECIPIENT:", recipient);
 
