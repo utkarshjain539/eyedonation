@@ -59,26 +59,33 @@ app.post("/", async (req, res) => {
     }
 
     // --- 2. HANDLE COMPLETE ---
+    // --- 2. HANDLE COMPLETE ---
     if (action === "complete") {
       console.log("--- STARTING COMPLETION ---");
+      // This log helps identify exactly what Meta sends us
       console.log("Full Decrypted Payload for Debug:", JSON.stringify(decryptedPayload));
 
       const finalResponse = { version: "3.0", data: { acknowledged: true } };
 
       try {
         const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
+        
+        // --- PRINTING LINK TO CONSOLE ---
+        console.log("--- ABTYP API RESPONSE ---");
+        console.log("Full API Body:", JSON.stringify(linkRes.data, null, 2));
+        
         const groupLink = linkRes.data?.Data?.WhatsAppGroupLink;
-        
-        // Try all common locations for the phone number
+        console.log("Extracted WhatsApp Group Link:", groupLink);
+        // --------------------------------
+
         const recipient = decryptedPayload.phone_number || data.phone_number || decryptedPayload.user_id;
-        
-        console.log("Resolved Recipient:", recipient);
-        console.log("Group Link found:", groupLink);
+        console.log("Resolved Recipient Phone:", recipient);
 
         if (recipient && groupLink) {
+          console.log(`Attempting to send message to ${recipient}...`);
           const fbRes = await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
             messaging_product: "whatsapp",
-            to: recipient.replace('+', ''), // Meta API hates the '+' sign
+            to: recipient.toString().replace('+', ''), // Ensure no '+' sign
             type: "text",
             text: { body: `Here is your ABTYP WhatsApp Group Link: ${groupLink}` }
           }, { 
@@ -89,9 +96,11 @@ app.post("/", async (req, res) => {
           console.log("FAILURE: Missing Link or Recipient. Link:", !!groupLink, "Recipient:", !!recipient);
         }
       } catch (e) {
+        // Log detailed error data if the Meta API or your Link API fails
         console.error("COMPLETION ERROR:", e.response?.data || e.message);
       }
 
+      // Always return encrypted acknowledgement to Meta
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
       const encrypted = Buffer.concat([cipher.update(JSON.stringify(finalResponse), "utf8"), cipher.final()]);
       return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
