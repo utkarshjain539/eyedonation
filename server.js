@@ -200,8 +200,9 @@ ${groupLink}`
     }
 
     if (data.parishad_id) {
-      responseData.is_submit_enabled = true;
-    }
+  responseData.is_submit_enabled = true;
+  responseData.parishad_id = data.parishad_id;
+}
 
     const responsePayload = {
       version: "3.0",
