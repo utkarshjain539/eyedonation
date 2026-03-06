@@ -13,7 +13,7 @@ const ABTYP_HEADERS = {
 };
 
 const PHONE_NUMBER_ID = "1049088024951885";
-const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQ9bEUbvfZCQreih1YkzLnfOZAELRHf0W1a1fksoqkrZCiCioZBcwlcAmezP1ZCxeC2rgP0hHDCF2NcWtkp8iR4zCxEkjBROO5iD9TJuZAzMQkfwf0DonZBFAp4fca8RvpZAyIaFEZC3YT4cE8qbGNJcbvOAUljfYZCz7dZCtRTB5ApmUbMfHTxKiZCEZCnJ6ctCGFI61J0sJVZCceHysZAUkuzwtANR97r1scDhZA6oVZC13BJ30iZCz63zZCb15z1mmq1nKRxcyHY39CJvdIhuMS1R";
+const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQ88ZCzIsoJq5ZCy9i0pyvmyG4pSRSe6dF8SvDZC7XFZCeKYQlUaabve1sjxMh8rnbsPUkZAAKp2fNcvq0Gg8qqH2BDUKu0yaD0lrZCOPFPUiVaEHgZBC2jSVsv2U6hTL0ZBcNviAARZAnVgieRzlZBpkXkvqZANbx9nFwkZC5sNeL8MhgUMIDtNZA2W0Il3LXOPNUrbuzZCZCGJgHPfOymGVENYTWCovIZCC8qkWsCMbDIVY";
 
 /* ---------------- PRIVATE KEY ---------------- */
 
@@ -40,10 +40,6 @@ app.get("/", (req, res) => {
 /* ---------------- FLOW ENDPOINT ---------------- */
 
 app.post("/", async (req, res) => {
-
-  console.log("\n================ FLOW REQUEST ================");
-  console.log("TIME:", new Date().toISOString());
-
   const {
     encrypted_aes_key,
     encrypted_flow_data,
@@ -52,14 +48,11 @@ app.post("/", async (req, res) => {
   } = req.body;
 
   if (!encrypted_aes_key) {
-    console.log("PING / NON FLOW REQUEST");
     return res.status(200).send("OK");
   }
 
   try {
-
     /* ---------- DECRYPT AES KEY ---------- */
-
     const aesKey = crypto.privateDecrypt(
       {
         key: formattedKey,
@@ -70,14 +63,11 @@ app.post("/", async (req, res) => {
     );
 
     const requestIv = Buffer.from(initial_vector, "base64");
-
     const responseIv = Buffer.alloc(requestIv.length);
     for (let i = 0; i < requestIv.length; i++) responseIv[i] = ~requestIv[i];
 
     /* ---------- DECRYPT PAYLOAD ---------- */
-
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
-
     const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
 
     decipher.setAuthTag(
@@ -94,23 +84,11 @@ app.post("/", async (req, res) => {
       ) + decipher.final("utf8");
 
     const decryptedPayload = JSON.parse(decrypted);
-
-    console.log("DECRYPTED PAYLOAD:");
-    console.log(JSON.stringify(decryptedPayload, null, 2));
-
     const { action, data } = decryptedPayload;
 
-    console.log("ACTION:", action);
-    console.log("DATA:", data);
-
     /* ---------------- PING ---------------- */
-
     if (action === "ping") {
-
-      console.log("PING RECEIVED");
-
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
-
       const encrypted = Buffer.concat([
         cipher.update(JSON.stringify({ data: { status: "active" } }), "utf8"),
         cipher.final()
@@ -122,199 +100,94 @@ app.post("/", async (req, res) => {
     }
 
     /* ---------------- COMPLETE (FLOW SUBMIT) ---------------- */
+    if (action === "complete") {
+      try {
+        const parishadId = data.parishad_id;
+        const recipient = decryptedPayload.user_id;
 
-   /* ---------------- COMPLETE (FLOW SUBMIT) ---------------- */
+        if (parishadId && recipient) {
+          const linkRes = await axios.get(
+            `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${parishadId}`,
+            { headers: ABTYP_HEADERS }
+          );
 
-if (action === "complete") {
-  console.log("COMPLETE ACTION TRIGGERED");
-  
-  try {
-    // Get parishad_id from the form data
-    const parishadId = data.parishad_id;
-    console.log("PARISHAD ID:", parishadId);
-    
-    // Get recipient from the decrypted payload (this is the WhatsApp user's number)
-    const recipient = decryptedPayload.user_id;
-    console.log("RECIPIENT:", recipient);
-    
-    if (!parishadId) {
-      console.log("ERROR: No parishad_id provided");
-      return res.status(400).send("Missing parishad_id");
-    }
-    
-    if (!recipient) {
-      console.log("ERROR: No recipient (user_id) found");
-      return res.status(400).send("Missing recipient");
-    }
-    
-    // Fetch WhatsApp Group Link
-    const linkRes = await axios.get(
-      `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${parishadId}`,
-      { headers: ABTYP_HEADERS }
-    );
-    
-    console.log("GROUP LINK API RESPONSE:", linkRes.data);
-    
-    const groupLink = linkRes.data?.Data?.WhatsAppGroupLink || null;
-    console.log("GROUP LINK:", groupLink);
-    
-    if (groupLink) {
-      // Send WhatsApp message
-      const waRes = await axios.post(
-        `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
-        {
-          messaging_product: "whatsapp",
-          to: recipient,
-          type: "text",
-          text: {
-            body: `Welcome to ABTYP 🙏\n\nHere is your Parishad WhatsApp Group Link:\n\n${groupLink}`
-          }
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-            "Content-Type": "application/json"
+          const groupLink = linkRes.data?.Data?.WhatsAppGroupLink;
+
+          if (groupLink) {
+            await axios.post(
+              `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
+              {
+                messaging_product: "whatsapp",
+                to: recipient,
+                type: "text",
+                text: {
+                  body: `Welcome to ABTYP 🙏\n\nHere is your Parishad WhatsApp Group Link:\n\n${groupLink}`
+                }
+              },
+              {
+                headers: {
+                  Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+                  "Content-Type": "application/json"
+                }
+              }
+            );
           }
         }
-      );
-      
-      console.log("WHATSAPP SUCCESS:", waRes.data);
-    } else {
-      console.log("Group link not found for parishad ID:", parishadId);
+      } catch (error) {
+        // Silent fail - don't let WhatsApp errors break the flow response
+      }
+
+      const responsePayload = {
+        version: "3.0",
+        data: { acknowledged: true }
+      };
+
+      const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
+      const encrypted = Buffer.concat([
+        cipher.update(JSON.stringify(responsePayload), "utf8"),
+        cipher.final()
+      ]);
+
+      return res
+        .status(200)
+        .send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
     }
-    
-  } catch (error) {
-    console.log("ERROR IN COMPLETE HANDLER:");
-    console.log(error.response?.data || error.message);
-  }
-  
-  // Respond to Flow (always send success response to flow even if WhatsApp fails)
-  const responsePayload = {
-    version: "3.0",
-    data: { acknowledged: true }
-  };
-  
-  const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
-  
-  const encrypted = Buffer.concat([
-    cipher.update(JSON.stringify(responsePayload), "utf8"),
-    cipher.final()
-  ]);
-  
-  return res
-    .status(200)
-    .send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
-}
 
     /* ---------------- DROPDOWN DATA ---------------- */
-
     let responseData = {
       country_list: [],
       state_list: [],
       parishad_list: [],
       is_state_enabled: false,
-      is_parishad_enabled: false,
-      is_submit_enabled: false
+      is_parishad_enabled: false
     };
 
-    /* Country */
-
+    // Country
     const countryRes = await axios.get(
       "https://api.abtyp.org/v0/country",
       { headers: ABTYP_HEADERS }
     );
-
     responseData.country_list = mapList(countryRes.data?.Data);
 
-    /* State */
-
+    // State
     if (data.country_id) {
-
       const stateRes = await axios.get(
         `https://api.abtyp.org/v0/state?CountryId=${data.country_id}`,
         { headers: ABTYP_HEADERS }
       );
-
       responseData.state_list = mapList(stateRes.data?.Data);
-
       responseData.is_state_enabled = responseData.state_list.length > 0;
-
     }
 
-    /* Parishad */
-
+    // Parishad
     if (data.state_id) {
-
       const parishadRes = await axios.get(
         `https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`,
         { headers: ABTYP_HEADERS }
       );
-
       responseData.parishad_list = mapList(parishadRes.data?.Data);
-
       responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
-
     }
-
-    /* Enable Submit */
-
-    if (data.parishad_id) {
-
-  //console.log("PARISHAD SELECTED:", data.parishad_id);
-
-  try {
-
-    const linkRes = await axios.get(
-      `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`,
-      { headers: ABTYP_HEADERS }
-    );
-
-    console.log("GROUP LINK API RESPONSE:", linkRes.data);
-
-    const groupLink = linkRes.data?.Data?.WhatsAppGroupLink;
-
-    const recipient = decryptedPayload.user_id;
-
-    console.log("RECIPIENT:", recipient);
-    console.log("GROUP LINK:", groupLink);
-
-    if (recipient && groupLink) {
-
-      const waRes = await axios.post(
-        `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
-        {
-          messaging_product: "whatsapp",
-          to: recipient,
-          type: "text",
-          text: {
-            body: `Welcome to ABTYP 🙏
-
-Here is your Parishad WhatsApp Group Link:
-
-${groupLink}`
-          }
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-            "Content-Type": "application/json"
-          }
-        }
-      );
-
-      console.log("WHATSAPP MESSAGE SENT:", waRes.data);
-
-    }
-
-  } catch (err) {
-
-    console.log("GROUP LINK ERROR:", err.response?.data || err.message);
-
-  }
-
-}
-
-    console.log("RESPONSE DATA:", responseData);
 
     const responsePayload = {
       version: "3.0",
@@ -323,7 +196,6 @@ ${groupLink}`
     };
 
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
-
     const encrypted = Buffer.concat([
       cipher.update(JSON.stringify(responsePayload), "utf8"),
       cipher.final()
@@ -334,13 +206,8 @@ ${groupLink}`
       .send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
 
   } catch (err) {
-
-    console.log("SERVER ERROR:", err);
-
     return res.status(500).send("Error");
-
   }
-
 });
 
 /* ---------------- START SERVER ---------------- */
