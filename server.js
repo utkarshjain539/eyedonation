@@ -150,34 +150,43 @@ console.log("PARISHAD ID:", data.parishad_id);
 
         console.log("RECIPIENT:", recipient);
 
-        if (recipient && groupLink) {
 
-          const waRes = await axios.post(
-            `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
-            {
-              messaging_product: "whatsapp",
-              to: recipient,
-              type: "text",
-              text: {
-                body: `Welcome to ABTYP 🙏
+if (recipient && groupLink) {
+
+  try {
+
+    const waRes = await axios.post(
+      `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: "whatsapp",
+        to: recipient,
+        type: "text",
+        text: {
+          body: `Welcome to ABTYP 🙏
 
 Here is your Parishad WhatsApp Group Link:
 
 ${groupLink}`
-              }
-            },
-            {
-              headers: {
-                Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-                "Content-Type": "application/json"
-              }
-            }
-          );
+        }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
 
-          console.log("WHATSAPP API RESPONSE:", waRes.data);
-          console.log("MESSAGE SENT SUCCESSFULLY");
+    console.log("WHATSAPP SUCCESS:", waRes.data);
 
-        } else {
+  } catch (err) {
+
+    console.log("WHATSAPP ERROR:");
+    console.log(err.response?.data || err.message);
+
+  }
+
+} else {
 
           console.log("Recipient or group link missing");
 
