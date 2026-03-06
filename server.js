@@ -10,7 +10,7 @@ console.log("🚀 ABTYP Flow Server Started");
 /* CONFIG */
 
 const PHONE_NUMBER_ID = "1049088024951885";
-const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQ88ZCzIsoJq5ZCy9i0pyvmyG4pSRSe6dF8SvDZC7XFZCeKYQlUaabve1sjxMh8rnbsPUkZAAKp2fNcvq0Gg8qqH2BDUKu0yaD0lrZCOPFPUiVaEHgZBC2jSVsv2U6hTL0ZBcNviAARZAnVgieRzlZBpkXkvqZANbx9nFwkZC5sNeL8MhgUMIDtNZA2W0Il3LXOPNUrbuzZCZCGJgHPfOymGVENYTWCovIZCC8qkWsCMbDIVY";
+const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQ7HLSdh7qIKZAnAPBx54WKIwqoz2GA3twqVRjNZA7wbsBhP2r8xFVGtZBhg8cyFj9Y8VEnocxJ9MG47Sqdd1GC7WWoIl2A2XQhL94AqsfFaXGZCSzmf5SPz1PZAXyCI9ZC8MJ0C56W52GpU9TZBFayZBJkZCfzkJ2EznKHNMag830dKxB9ZBmU0FxFlnkTUiQslSrRrh8g96wC75Tl2QEIcs3IZCjfFuARGN9BxpD7ulw9fs2SasZAZBupNFb1iNju7b8qCcSKZCtHDix0qrGb";
 const FIXED_RECIPIENT = "918488861504";
 
 const ABTYP_HEADERS = {
@@ -87,7 +87,7 @@ app.post("/", async (req, res) => {
 
     const payload = JSON.parse(decrypted);
 
-    const { data } = payload;
+    const data = payload?.data || {};
 
     console.log("FLOW DATA:", data);
 
