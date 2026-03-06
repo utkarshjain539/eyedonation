@@ -11,7 +11,7 @@ const ABTYP_HEADERS = {
 };
 
 const PHONE_NUMBER_ID = "1049088024951885";
-const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQ26D7U9NSEBTatzRUWpbATSZC0daUlAIjDrZB7z2un13NR2ayVGBhzD4tgfZBZBUt7cZCtz21F1QInyaaON0yeAAsOuKUZB00RcB6KlZAJjjovZCJ1XRKlsC6aeWR6GTG8znFDbr3XF7jLKKPWFwh1pNCBYhrel4UZBO5oLLEbun62rK0Hw0qY6mRDwP95N9VtJbA4mEeL7iinfUqEbZBJgCl2GrR4whuiby4uIS3NQFf4aHKLL0nH4wmNIkynzoZA8dOx9fZA60bmUXZAuja";
+const WHATSAPP_TOKEN = "YOUR_WHATSAPP_TOKEN";
 
 const privateKeyInput = process.env.PRIVATE_KEY || "";
 
@@ -26,16 +26,13 @@ const mapList = (arr) =>
   }));
 
 app.post("/", async (req, res) => {
-  const {
-    encrypted_aes_key,
-    encrypted_flow_data,
-    initial_vector,
-    authentication_tag
-  } = req.body;
+
+  const { encrypted_aes_key, encrypted_flow_data, initial_vector, authentication_tag } = req.body;
 
   if (!encrypted_aes_key) return res.status(200).send("OK");
 
   try {
+
     const aesKey = crypto.privateDecrypt(
       {
         key: formattedKey,
@@ -48,9 +45,7 @@ app.post("/", async (req, res) => {
     const requestIv = Buffer.from(initial_vector, "base64");
 
     const responseIv = Buffer.alloc(requestIv.length);
-    for (let i = 0; i < requestIv.length; i++) {
-      responseIv[i] = ~requestIv[i];
-    }
+    for (let i = 0; i < requestIv.length; i++) responseIv[i] = ~requestIv[i];
 
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
 
@@ -70,13 +65,15 @@ app.post("/", async (req, res) => {
       ) + decipher.final("utf8");
 
     const decryptedPayload = JSON.parse(decrypted);
-console.log("FULL PAYLOAD:", decryptedPayload);
+
+    console.log("FULL PAYLOAD:", decryptedPayload);
+
     const { action, data } = decryptedPayload;
 
-    console.log("ACTION:", action);
-    console.log("DATA:", data);
+    /* -------- Ping -------- */
 
     if (action === "ping") {
+
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
 
       const encrypted = Buffer.concat([
@@ -89,14 +86,14 @@ console.log("FULL PAYLOAD:", decryptedPayload);
         .send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
     }
 
-    /* =============================
-       COMPLETE ACTION
-    ============================== */
+    /* -------- Complete -------- */
 
     if (action === "complete") {
+
       console.log("FLOW COMPLETED");
 
       try {
+
         const parishadId = data.parishad_id;
 
         const linkRes = await axios.get(
@@ -106,14 +103,11 @@ console.log("FULL PAYLOAD:", decryptedPayload);
 
         const groupLink = linkRes.data?.Data?.WhatsAppGroupLink || null;
 
-        console.log("GROUP LINK:", groupLink);
-
         const recipient = decryptedPayload.user_id;
 
-        console.log("RECIPIENT:", recipient);
-
         if (recipient && groupLink) {
-          const waResponse = await axios.post(
+
+          await axios.post(
             `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
             {
               messaging_product: "whatsapp",
@@ -123,7 +117,6 @@ console.log("FULL PAYLOAD:", decryptedPayload);
                 body: `Welcome to ABTYP 🙏
 
 Here is your Parishad WhatsApp Group Link:
-
 ${groupLink}`
               }
             },
@@ -135,16 +128,17 @@ ${groupLink}`
             }
           );
 
-          console.log("WHATSAPP SENT:", waResponse.data);
+          console.log("WHATSAPP MESSAGE SENT");
+
         }
-      } catch (error) {
-        console.error(
-          "WHATSAPP ERROR:",
-          JSON.stringify(error.response?.data || error.message)
-        );
+
+      } catch (err) {
+
+        console.error("WHATSAPP ERROR:", err.response?.data || err.message);
+
       }
 
-      const finalResponse = {
+      const responsePayload = {
         version: "3.0",
         data: { acknowledged: true }
       };
@@ -152,7 +146,7 @@ ${groupLink}`
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
 
       const encrypted = Buffer.concat([
-        cipher.update(JSON.stringify(finalResponse), "utf8"),
+        cipher.update(JSON.stringify(responsePayload), "utf8"),
         cipher.final()
       ]);
 
@@ -161,9 +155,7 @@ ${groupLink}`
         .send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
     }
 
-    /* =============================
-       DROPDOWN DATA LOGIC
-    ============================== */
+    /* -------- Dropdown Data -------- */
 
     let responseData = {
       country_list: [],
@@ -182,6 +174,7 @@ ${groupLink}`
     responseData.country_list = mapList(countryRes.data?.Data);
 
     if (data.country_id) {
+
       const stateRes = await axios.get(
         `https://api.abtyp.org/v0/state?CountryId=${data.country_id}`,
         { headers: ABTYP_HEADERS }
@@ -189,10 +182,12 @@ ${groupLink}`
 
       responseData.state_list = mapList(stateRes.data?.Data);
 
-      responseData.is_state_enabled = responseData.state_list.length > 0;
+      responseData.is_state_enabled = true;
+
     }
 
     if (data.state_id) {
+
       const parishadRes = await axios.get(
         `https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`,
         { headers: ABTYP_HEADERS }
@@ -200,7 +195,8 @@ ${groupLink}`
 
       responseData.parishad_list = mapList(parishadRes.data?.Data);
 
-      responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
+      responseData.is_parishad_enabled = true;
+
     }
 
     if (data.parishad_id) {
@@ -223,12 +219,17 @@ ${groupLink}`
     return res
       .status(200)
       .send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
+
   } catch (err) {
-    console.error("SERVER ERROR:", err.message);
+
+    console.error("SERVER ERROR:", err);
+
     return res.status(500).send("Error");
+
   }
+
 });
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log("Server Running");
-});
+app.listen(process.env.PORT || 3000, () =>
+  console.log("Server Running")
+);
