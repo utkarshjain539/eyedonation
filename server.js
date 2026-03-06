@@ -124,7 +124,8 @@ app.post("/", async (req, res) => {
     /* ---------------- COMPLETE (FLOW SUBMIT) ---------------- */
 
     if (action === "complete") {
-
+console.log("COMPLETE ACTION TRIGGERED");
+console.log("PARISHAD ID:", data.parishad_id);
       console.log("FLOW COMPLETED");
 
       try {
