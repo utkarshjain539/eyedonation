@@ -149,11 +149,11 @@ app.post("/", async (req, res) => {
 
         const groupLink = linkRes.data?.Data?.WhatsAppGroupLink;
 
-        const recipient =
-          payload.user_id ||
-          payload?.context?.user_id ||
-          null;
-
+        // const recipient =
+        //   payload.user_id ||
+        //   payload?.context?.user_id ||
+        //   null;
+const recipient = "918488861504";
         console.log("RECIPIENT:", recipient);
         console.log("GROUP LINK:", groupLink);
 
