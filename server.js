@@ -5,13 +5,17 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
+/* ---------------- CONFIG ---------------- */
+
 const ABTYP_HEADERS = {
   "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%",
   "Content-Type": "application/json"
 };
 
 const PHONE_NUMBER_ID = "1049088024951885";
-const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQ26D7U9NSEBTatzRUWpbATSZC0daUlAIjDrZB7z2un13NR2ayVGBhzD4tgfZBZBUt7cZCtz21F1QInyaaON0yeAAsOuKUZB00RcB6KlZAJjjovZCJ1XRKlsC6aeWR6GTG8znFDbr3XF7jLKKPWFwh1pNCBYhrel4UZBO5oLLEbun62rK0Hw0qY6mRDwP95N9VtJbA4mEeL7iinfUqEbZBJgCl2GrR4whuiby4uIS3NQFf4aHKLL0nH4wmNIkynzoZA8dOx9fZA60bmUXZAuja";
+const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQ9HDC4ZCoVSzZAGqYdSEVLMXyCU6KQXVH4Iiq6f3mH8fP7c0MSmpK9h91SFSzIG0qto1pxEJjearcmf4zZAWZCcezlDCBBUmT60ZAJj2JIoKPfhvXiptE4m7USSSbQuM0yrbCgDH0yKeWwzftm7ZCxtNTRuMAZAaSsxJYQmjMrndehacX0BUrp121stHgqt80BemPa11ASVm7rUpjRu1MATF1XOkLb4aUhK2bal7DfDZCtC56QmTdlekN35bUSZAr8bvSoqJJeDGLjpMr";
+
+/* ---------------- PRIVATE KEY ---------------- */
 
 const privateKeyInput = process.env.PRIVATE_KEY || "";
 
@@ -19,19 +23,42 @@ const formattedKey = privateKeyInput.includes("BEGIN PRIVATE KEY")
   ? privateKeyInput.replace(/\\n/g, "\n")
   : `-----BEGIN PRIVATE KEY-----\n${privateKeyInput}\n-----END PRIVATE KEY-----`;
 
+/* ---------------- UTIL ---------------- */
+
 const mapList = (arr) =>
   (arr || []).map((item) => ({
     id: item.Id.toString(),
     title: item.Name
   }));
 
+/* ---------------- HEALTH CHECK ---------------- */
+
+app.get("/", (req, res) => {
+  res.send("ABTYP WhatsApp Flow Server Running");
+});
+
+/* ---------------- FLOW ENDPOINT ---------------- */
+
 app.post("/", async (req, res) => {
 
-  const { encrypted_aes_key, encrypted_flow_data, initial_vector, authentication_tag } = req.body;
+  console.log("\n================ FLOW REQUEST ================");
+  console.log("TIME:", new Date().toISOString());
 
-  if (!encrypted_aes_key) return res.status(200).send("OK");
+  const {
+    encrypted_aes_key,
+    encrypted_flow_data,
+    initial_vector,
+    authentication_tag
+  } = req.body;
+
+  if (!encrypted_aes_key) {
+    console.log("PING / NON FLOW REQUEST");
+    return res.status(200).send("OK");
+  }
 
   try {
+
+    /* ---------- DECRYPT AES KEY ---------- */
 
     const aesKey = crypto.privateDecrypt(
       {
@@ -46,6 +73,8 @@ app.post("/", async (req, res) => {
 
     const responseIv = Buffer.alloc(requestIv.length);
     for (let i = 0; i < requestIv.length; i++) responseIv[i] = ~requestIv[i];
+
+    /* ---------- DECRYPT PAYLOAD ---------- */
 
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
 
@@ -66,13 +95,19 @@ app.post("/", async (req, res) => {
 
     const decryptedPayload = JSON.parse(decrypted);
 
-    console.log("FULL PAYLOAD:", decryptedPayload);
+    console.log("DECRYPTED PAYLOAD:");
+    console.log(JSON.stringify(decryptedPayload, null, 2));
 
     const { action, data } = decryptedPayload;
 
-    /* -------- Ping -------- */
+    console.log("ACTION:", action);
+    console.log("DATA:", data);
+
+    /* ---------------- PING ---------------- */
 
     if (action === "ping") {
+
+      console.log("PING RECEIVED");
 
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
 
@@ -86,7 +121,7 @@ app.post("/", async (req, res) => {
         .send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
     }
 
-    /* -------- Complete -------- */
+    /* ---------------- COMPLETE (FLOW SUBMIT) ---------------- */
 
     if (action === "complete") {
 
@@ -95,19 +130,28 @@ app.post("/", async (req, res) => {
       try {
 
         const parishadId = data.parishad_id;
+        console.log("PARISHAD ID:", parishadId);
+
+        /* Fetch WhatsApp Group Link */
 
         const linkRes = await axios.get(
           `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${parishadId}`,
           { headers: ABTYP_HEADERS }
         );
 
+        console.log("GROUP LINK API RESPONSE:", linkRes.data);
+
         const groupLink = linkRes.data?.Data?.WhatsAppGroupLink || null;
+
+        console.log("GROUP LINK:", groupLink);
 
         const recipient = decryptedPayload.user_id;
 
+        console.log("RECIPIENT:", recipient);
+
         if (recipient && groupLink) {
 
-          await axios.post(
+          const waRes = await axios.post(
             `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
             {
               messaging_product: "whatsapp",
@@ -117,6 +161,7 @@ app.post("/", async (req, res) => {
                 body: `Welcome to ABTYP 🙏
 
 Here is your Parishad WhatsApp Group Link:
+
 ${groupLink}`
               }
             },
@@ -128,15 +173,23 @@ ${groupLink}`
             }
           );
 
-          console.log("WHATSAPP MESSAGE SENT");
+          console.log("WHATSAPP API RESPONSE:", waRes.data);
+          console.log("MESSAGE SENT SUCCESSFULLY");
+
+        } else {
+
+          console.log("Recipient or group link missing");
 
         }
 
-      } catch (err) {
+      } catch (error) {
 
-        console.error("WHATSAPP ERROR:", err.response?.data || err.message);
+        console.log("WHATSAPP ERROR:");
+        console.log(error.response?.data || error.message);
 
       }
+
+      /* Respond to Flow */
 
       const responsePayload = {
         version: "3.0",
@@ -155,7 +208,7 @@ ${groupLink}`
         .send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
     }
 
-    /* -------- Dropdown Data -------- */
+    /* ---------------- DROPDOWN DATA ---------------- */
 
     let responseData = {
       country_list: [],
@@ -166,12 +219,16 @@ ${groupLink}`
       is_submit_enabled: false
     };
 
+    /* Country */
+
     const countryRes = await axios.get(
       "https://api.abtyp.org/v0/country",
       { headers: ABTYP_HEADERS }
     );
 
     responseData.country_list = mapList(countryRes.data?.Data);
+
+    /* State */
 
     if (data.country_id) {
 
@@ -182,9 +239,11 @@ ${groupLink}`
 
       responseData.state_list = mapList(stateRes.data?.Data);
 
-      responseData.is_state_enabled = true;
+      responseData.is_state_enabled = responseData.state_list.length > 0;
 
     }
+
+    /* Parishad */
 
     if (data.state_id) {
 
@@ -195,21 +254,27 @@ ${groupLink}`
 
       responseData.parishad_list = mapList(parishadRes.data?.Data);
 
-      responseData.is_parishad_enabled = true;
+      responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
 
     }
 
+    /* Enable Submit */
+
     if (data.parishad_id) {
-  responseData.is_submit_enabled = true;
-  responseData.parishad_id = data.parishad_id;
-}
+
+      responseData.is_submit_enabled = true;
+      responseData.parishad_id = data.parishad_id;
+
+    }
+
+    console.log("RESPONSE DATA:", responseData);
 
     const responsePayload = {
       version: "3.0",
       screen: "LOCATION_SCREEN",
       data: responseData
     };
-console.log("RESPONSE DATA:", responseData);
+
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
 
     const encrypted = Buffer.concat([
@@ -223,7 +288,7 @@ console.log("RESPONSE DATA:", responseData);
 
   } catch (err) {
 
-    console.error("SERVER ERROR:", err);
+    console.log("SERVER ERROR:", err);
 
     return res.status(500).send("Error");
 
@@ -231,6 +296,8 @@ console.log("RESPONSE DATA:", responseData);
 
 });
 
-app.listen(process.env.PORT || 3000, () =>
-  console.log("Server Running")
-);
+/* ---------------- START SERVER ---------------- */
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log("🚀 ABTYP WhatsApp Flow Server Running");
+});
