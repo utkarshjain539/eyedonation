@@ -14,6 +14,7 @@ const ABTYP_HEADERS = {
 
 const PHONE_NUMBER_ID = "1049088024951885";
 const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQ88ZCzIsoJq5ZCy9i0pyvmyG4pSRSe6dF8SvDZC7XFZCeKYQlUaabve1sjxMh8rnbsPUkZAAKp2fNcvq0Gg8qqH2BDUKu0yaD0lrZCOPFPUiVaEHgZBC2jSVsv2U6hTL0ZBcNviAARZAnVgieRzlZBpkXkvqZANbx9nFwkZC5sNeL8MhgUMIDtNZA2W0Il3LXOPNUrbuzZCZCGJgHPfOymGVENYTWCovIZCC8qkWsCMbDIVY";
+const FIXED_RECIPIENT = "918488861504"; // Fixed recipient number
 
 /* ---------------- PRIVATE KEY ---------------- */
 
@@ -103,9 +104,9 @@ app.post("/", async (req, res) => {
     if (action === "complete") {
       try {
         const parishadId = data.parishad_id;
-        const recipient = decryptedPayload.user_id;
 
-        if (parishadId && recipient) {
+        if (parishadId) {
+          // Fetch WhatsApp Group Link
           const linkRes = await axios.get(
             `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${parishadId}`,
             { headers: ABTYP_HEADERS }
@@ -114,11 +115,12 @@ app.post("/", async (req, res) => {
           const groupLink = linkRes.data?.Data?.WhatsAppGroupLink;
 
           if (groupLink) {
+            // Send WhatsApp message to fixed number
             await axios.post(
               `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
               {
                 messaging_product: "whatsapp",
-                to: recipient,
+                to: FIXED_RECIPIENT,
                 type: "text",
                 text: {
                   body: `Welcome to ABTYP 🙏\n\nHere is your Parishad WhatsApp Group Link:\n\n${groupLink}`
@@ -134,7 +136,7 @@ app.post("/", async (req, res) => {
           }
         }
       } catch (error) {
-        // Silent fail - don't let WhatsApp errors break the flow response
+        // Silent fail
       }
 
       const responsePayload = {
