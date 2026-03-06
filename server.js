@@ -70,7 +70,7 @@ app.post("/", async (req, res) => {
       ) + decipher.final("utf8");
 
     const decryptedPayload = JSON.parse(decrypted);
-
+console.log("FULL PAYLOAD:", decryptedPayload);
     const { action, data } = decryptedPayload;
 
     console.log("ACTION:", action);
