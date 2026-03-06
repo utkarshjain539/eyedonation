@@ -60,47 +60,36 @@ app.post("/", async (req, res) => {
 
     // --- 2. HANDLE COMPLETE ---
     if (action === "complete") {
-      console.log("Flow Completed. Processing Link Delivery...");
+      console.log("--- STARTING COMPLETION ---");
+      console.log("Full Decrypted Payload for Debug:", JSON.stringify(decryptedPayload));
+
       const finalResponse = { version: "3.0", data: { acknowledged: true } };
 
       try {
         const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
-        
-        console.log("ABTYP API Response Data:", JSON.stringify(linkRes.data));
-
         const groupLink = linkRes.data?.Data?.WhatsAppGroupLink;
-        const prabhari = linkRes.data?.Data?.StatePrabhariName || "Admin";
         
-        // Log the data we found
-        console.log("Found Group Link:", groupLink);
-
-        const recipient = decryptedPayload.phone_number || data.phone_number;
-        console.log("Target Recipient Phone:", recipient);
+        // Try all common locations for the phone number
+        const recipient = decryptedPayload.phone_number || data.phone_number || decryptedPayload.user_id;
         
-        if (recipient) {
-          const messageText = groupLink 
-            ? `Hello! Here is your ABTYP WhatsApp Group Link: ${groupLink}\n\nContact: ${prabhari}`
-            : "Hello! Your registration is complete. We will send your group link shortly.";
+        console.log("Resolved Recipient:", recipient);
+        console.log("Group Link found:", groupLink);
 
-          console.log("Sending WhatsApp Message...");
+        if (recipient && groupLink) {
           const fbRes = await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
             messaging_product: "whatsapp",
-            to: recipient,
+            to: recipient.replace('+', ''), // Meta API hates the '+' sign
             type: "text",
-            text: { body: messageText }
+            text: { body: `Here is your ABTYP WhatsApp Group Link: ${groupLink}` }
           }, { 
-            headers: { 
-              Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-              "Content-Type": "application/json"
-            } 
+            headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } 
           });
-          console.log("Meta API Response (Success):", fbRes.data);
+          console.log("META SUCCESS:", JSON.stringify(fbRes.data));
         } else {
-          console.log("Error: Recipient phone number is missing from payload.");
+          console.log("FAILURE: Missing Link or Recipient. Link:", !!groupLink, "Recipient:", !!recipient);
         }
       } catch (e) {
-        // Detailed Meta error logging
-        console.error("WhatsApp Message Error:", e.response?.data || e.message);
+        console.error("COMPLETION ERROR:", e.response?.data || e.message);
       }
 
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
