@@ -57,7 +57,7 @@ app.post("/", async (req, res) => {
 
     console.log(">>> GROUP LINK:", groupLink);
 
-    const recipient = '918488861504';
+    const recipient = decryptedPayload.user_id;
 
     console.log("USER NUMBER:", recipient);
 
@@ -116,7 +116,19 @@ app.post("/", async (req, res) => {
       responseData.parishad_list = mapList(parishadRes.data?.Data);
       responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
     }
-    if (data.parishad_id) responseData.is_submit_enabled = true;
+    if (data.parishad_id) {
+
+  const linkRes = await axios.get(
+    `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`,
+    { headers: ABTYP_HEADERS }
+  );
+
+  const groupLink = linkRes.data?.Data?.WhatsAppGroupLink || null;
+
+  responseData.group_link = groupLink;
+  responseData.is_submit_enabled = true;
+
+}
 
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
     const encrypted = Buffer.concat([cipher.update(JSON.stringify({ version: "3.0", screen: "LOCATION_SCREEN", data: responseData }), "utf8"), cipher.final()]);
