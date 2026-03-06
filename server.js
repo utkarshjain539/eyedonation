@@ -14,7 +14,8 @@ const ABTYP_HEADERS = {
 
 const PHONE_NUMBER_ID = "1049088024951885";
 const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQ88ZCzIsoJq5ZCy9i0pyvmyG4pSRSe6dF8SvDZC7XFZCeKYQlUaabve1sjxMh8rnbsPUkZAAKp2fNcvq0Gg8qqH2BDUKu0yaD0lrZCOPFPUiVaEHgZBC2jSVsv2U6hTL0ZBcNviAARZAnVgieRzlZBpkXkvqZANbx9nFwkZC5sNeL8MhgUMIDtNZA2W0Il3LXOPNUrbuzZCZCGJgHPfOymGVENYTWCovIZCC8qkWsCMbDIVY";
-const FIXED_RECIPIENT = "918488861504"; // Fixed recipient number
+const FIXED_RECIPIENT = "918488861504";
+const FLOW_ID = "787019400633069";
 
 /* ---------------- PRIVATE KEY ---------------- */
 
@@ -85,13 +86,22 @@ app.post("/", async (req, res) => {
       ) + decipher.final("utf8");
 
     const decryptedPayload = JSON.parse(decrypted);
-    const { action, data } = decryptedPayload;
+    const { action, data, flow_token, flow_id } = decryptedPayload;
+
+    // Validate flow ID (optional but recommended)
+    if (flow_id && flow_id !== FLOW_ID) {
+      // Log mismatch but continue processing
+      console.log(`Flow ID mismatch: expected ${FLOW_ID}, got ${flow_id}`);
+    }
 
     /* ---------------- PING ---------------- */
     if (action === "ping") {
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
       const encrypted = Buffer.concat([
-        cipher.update(JSON.stringify({ data: { status: "active" } }), "utf8"),
+        cipher.update(JSON.stringify({ 
+          data: { status: "active" },
+          flow_token: flow_token 
+        }), "utf8"),
         cipher.final()
       ]);
 
@@ -141,7 +151,9 @@ app.post("/", async (req, res) => {
 
       const responsePayload = {
         version: "3.0",
-        data: { acknowledged: true }
+        data: { acknowledged: true },
+        flow_token: flow_token,
+        flow_id: FLOW_ID
       };
 
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
@@ -194,7 +206,9 @@ app.post("/", async (req, res) => {
     const responsePayload = {
       version: "3.0",
       screen: "LOCATION_SCREEN",
-      data: responseData
+      data: responseData,
+      flow_token: flow_token,
+      flow_id: FLOW_ID
     };
 
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
@@ -215,5 +229,5 @@ app.post("/", async (req, res) => {
 /* ---------------- START SERVER ---------------- */
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 ABTYP WhatsApp Flow Server Running");
+  console.log("🚀 ABTYP WhatsApp Flow Server Running with Flow ID: 787019400633069");
 });
