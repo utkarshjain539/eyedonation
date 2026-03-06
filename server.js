@@ -30,7 +30,6 @@ app.post("/", async (req, res) => {
   if (!encrypted_aes_key) return res.status(200).send("OK");
 
   try {
-    /* --- DECRYPTION --- */
     const aesKey = crypto.privateDecrypt(
       { key: formattedKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
       Buffer.from(encrypted_aes_key, "base64")
@@ -47,39 +46,44 @@ app.post("/", async (req, res) => {
     const decryptedPayload = JSON.parse(decrypted);
     const { action, data } = decryptedPayload;
 
-    /* --- 1. HANDLE PING (VERIFICATION) --- */
-    // This fixes the "Decrypted response not as expected" health check error
+    console.log("--- NEW FLOW ACTION ---");
+    console.log("Action:", action);
+
+    // --- 1. HANDLE PING ---
     if (action === "ping") {
+      console.log("Health Check (Ping) successful");
       const pingResponse = { data: { status: "active" } };
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
       const encrypted = Buffer.concat([cipher.update(JSON.stringify(pingResponse), "utf8"), cipher.final()]);
       return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
     }
 
-    /* --- 2. HANDLE COMPLETE (FINAL BUTTON) --- */
-    /* --- HANDLE COMPLETION (SEND LINK AS MESSAGE) --- */
+    // --- 2. HANDLE COMPLETE ---
     if (action === "complete") {
+      console.log("Flow Completed. Processing Link Delivery...");
       const finalResponse = { version: "3.0", data: { acknowledged: true } };
 
       try {
-        // 1. Fetch Link from your API
         const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
         
-        // FIX: Using the exact key "WhatsAppGroupLink" from your provided JSON
+        console.log("ABTYP API Response Data:", JSON.stringify(linkRes.data));
+
         const groupLink = linkRes.data?.Data?.WhatsAppGroupLink;
         const prabhari = linkRes.data?.Data?.StatePrabhariName || "Admin";
+        
+        // Log the data we found
+        console.log("Found Group Link:", groupLink);
 
-        // 2. Determine recipient
         const recipient = decryptedPayload.phone_number || data.phone_number;
+        console.log("Target Recipient Phone:", recipient);
         
         if (recipient) {
-          // 3. Construct the message body
           const messageText = groupLink 
             ? `Hello! Here is your ABTYP WhatsApp Group Link: ${groupLink}\n\nContact: ${prabhari}`
-            : "Hello! Your ABTYP registration is complete. We will send your group link shortly.";
+            : "Hello! Your registration is complete. We will send your group link shortly.";
 
-          // 4. Send the message
-          await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
+          console.log("Sending WhatsApp Message...");
+          const fbRes = await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
             messaging_product: "whatsapp",
             to: recipient,
             type: "text",
@@ -90,19 +94,22 @@ app.post("/", async (req, res) => {
               "Content-Type": "application/json"
             } 
           });
-          console.log("Test message sent to:", recipient);
+          console.log("Meta API Response (Success):", fbRes.data);
+        } else {
+          console.log("Error: Recipient phone number is missing from payload.");
         }
       } catch (e) {
-        console.error("Message delivery failed:", e.response?.data || e.message);
+        // Detailed Meta error logging
+        console.error("WhatsApp Message Error:", e.response?.data || e.message);
       }
 
-      // 5. Always return encrypted 200 OK to Meta
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
       const encrypted = Buffer.concat([cipher.update(JSON.stringify(finalResponse), "utf8"), cipher.final()]);
       return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
     }
 
-    /* --- 3. HANDLE DATA_EXCHANGE (DROPDOWNS) --- */
+    // --- 3. DATA EXCHANGE (DROPDOWNS) ---
+    console.log("Updating Dropdowns for data:", JSON.stringify(data));
     let responseData = {
       country_list: [], state_list: [], parishad_list: [],
       is_state_enabled: false, is_parishad_enabled: false, is_submit_enabled: false
@@ -129,9 +136,9 @@ app.post("/", async (req, res) => {
     return res.status(200).send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
 
   } catch (err) {
-    console.error("SERVER ERROR:", err.message);
+    console.error("CRITICAL ERROR:", err.message);
     return res.status(500).send("Error");
   }
 });
 
-app.listen(process.env.PORT || 3000, () => console.log("Server Running"));
+app.listen(process.env.PORT || 3000, () => console.log("Server Running on port 3000"));
