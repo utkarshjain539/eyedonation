@@ -208,7 +208,7 @@ ${groupLink}`
       screen: "LOCATION_SCREEN",
       data: responseData
     };
-
+console.log("RESPONSE DATA:", responseData);
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
 
     const encrypted = Buffer.concat([
