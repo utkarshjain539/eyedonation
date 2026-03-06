@@ -272,7 +272,7 @@ ${groupLink}`
 
     if (data.parishad_id) {
 
-  console.log("PARISHAD SELECTED:", data.parishad_id);
+  //console.log("PARISHAD SELECTED:", data.parishad_id);
 
   try {
 
