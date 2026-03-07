@@ -16,7 +16,7 @@ const ABTYP_HEADERS = {
   "Content-Type": "application/json"
 };
 
-/* ---------------- PRIVATE KEY FROM RENDER ENV ---------------- */
+/* ---------------- PRIVATE KEY (Render ENV) ---------------- */
 
 const privateKeyRaw = process.env.PRIVATE_KEY;
 
@@ -32,10 +32,10 @@ const mapList = (arr) =>
     title: item.Name
   }));
 
-/* ---------------- HEALTH CHECK ---------------- */
+/* ---------------- HEALTH ---------------- */
 
 app.get("/", (req, res) => {
-  res.send("ABTYP WhatsApp Flow Server Running");
+  res.send("ABTYP Flow Server Running");
 });
 
 /* ---------------- FLOW ENDPOINT ---------------- */
@@ -51,12 +51,11 @@ app.post("/", async (req, res) => {
       authentication_tag
     } = req.body;
 
-    /* Health check requests */
     if (!encrypted_aes_key) {
       return res.status(200).send("OK");
     }
 
-    /* ---------------- DECRYPT AES KEY ---------------- */
+    /* -------- DECRYPT AES KEY -------- */
 
     const aesKey = crypto.privateDecrypt(
       {
@@ -75,7 +74,7 @@ app.post("/", async (req, res) => {
       responseIv[i] = ~requestIv[i];
     }
 
-    /* ---------------- DECRYPT FLOW PAYLOAD ---------------- */
+    /* -------- DECRYPT PAYLOAD -------- */
 
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
 
@@ -93,7 +92,7 @@ app.post("/", async (req, res) => {
     const action = payload.action || "";
     const data = payload.data || {};
 
-    /* ---------------- PING ---------------- */
+    /* -------- PING -------- */
 
     if (action === "ping") {
 
@@ -109,7 +108,7 @@ app.post("/", async (req, res) => {
         .send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
     }
 
-    /* ---------------- DROPDOWN RESPONSE ---------------- */
+    /* -------- RESPONSE DATA -------- */
 
     let responseData = {
       country_list: [],
@@ -154,60 +153,52 @@ app.post("/", async (req, res) => {
       responseData.is_parishad_enabled = true;
     }
 
-    /* ---------------- SEND GROUP LINK ---------------- */
+    /* -------- SEND GROUP LINK -------- */
 
     if (data.parishad_id) {
 
       console.log("PARISHAD SELECTED:", data.parishad_id);
 
-      try {
+      const linkRes = await axios.get(
+        `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`,
+        { headers: ABTYP_HEADERS }
+      );
 
-        const linkRes = await axios.get(
-          `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`,
-          { headers: ABTYP_HEADERS }
-        );
+      const groupLink = linkRes.data?.Data?.WhatsAppGroupLink;
 
-        const groupLink = linkRes.data?.Data?.WhatsAppGroupLink;
+      console.log("GROUP LINK:", groupLink);
 
-        console.log("GROUP LINK:", groupLink);
+      if (groupLink) {
 
-        if (groupLink) {
-
-          await axios.post(
-            `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
-            {
-              messaging_product: "whatsapp",
-              to: RECIPIENT_NUMBER,
-              type: "text",
-              text: {
-                body: `Welcome to ABTYP 🙏
+        await axios.post(
+          `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
+          {
+            messaging_product: "whatsapp",
+            to: RECIPIENT_NUMBER,
+            type: "text",
+            text: {
+              body: `Welcome to ABTYP 🙏
 
 Here is your Parishad WhatsApp Group Link:
 
 ${groupLink}`
-              }
-            },
-            {
-              headers: {
-                Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-                "Content-Type": "application/json"
-              }
             }
-          );
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+              "Content-Type": "application/json"
+            }
+          }
+        );
 
-          console.log("WHATSAPP MESSAGE SENT");
-
-        }
-
-      } catch (err) {
-
-        console.log("WHATSAPP ERROR:", err.response?.data || err.message);
+        console.log("WHATSAPP MESSAGE SENT");
 
       }
 
     }
 
-    /* ---------------- ENCRYPT RESPONSE ---------------- */
+    /* -------- ENCRYPT RESPONSE -------- */
 
     const responsePayload = {
       version: "3.0",
