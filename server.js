@@ -19,22 +19,13 @@ const FLOW_ID = "787019400633069";
 
 /* ---------------- PRIVATE KEY ---------------- */
 
-// Get private key from environment variable
 const privateKeyInput = process.env.PRIVATE_KEY || "";
 
-// Format the private key properly
 let formattedKey;
-try {
-  if (privateKeyInput.includes("BEGIN PRIVATE KEY")) {
-    // If it already has headers, just fix newlines
-    formattedKey = privateKeyInput.replace(/\\n/g, "\n");
-  } else {
-    // If it's just the key content, add headers
-    formattedKey = `-----BEGIN PRIVATE KEY-----\n${privateKeyInput}\n-----END PRIVATE KEY-----`;
-  }
-} catch (err) {
-  console.error("Error formatting private key:", err);
-  formattedKey = "";
+if (privateKeyInput.includes("BEGIN PRIVATE KEY")) {
+  formattedKey = privateKeyInput.replace(/\\n/g, "\n");
+} else {
+  formattedKey = `-----BEGIN PRIVATE KEY-----\n${privateKeyInput}\n-----END PRIVATE KEY-----`;
 }
 
 /* ---------------- UTIL ---------------- */
@@ -54,7 +45,7 @@ app.get("/", (req, res) => {
 /* ---------------- FLOW ENDPOINT ---------------- */
 
 app.post("/", async (req, res) => {
-  // Always return 200 for WhatsApp webhook verification
+  // Handle WhatsApp webhook verification
   if (req.body.object) {
     return res.status(200).send("EVENT_RECEIVED");
   }
@@ -62,21 +53,16 @@ app.post("/", async (req, res) => {
   const {
     encrypted_aes_key,
     encrypted_flow_data,
-    initial_vector,
-    authentication_tag
+    initial_vector
   } = req.body;
 
-  // Handle ping/health check from WhatsApp
+  // Handle ping/health check
   if (!encrypted_aes_key) {
     return res.status(200).send("OK");
   }
 
   try {
     /* ---------- DECRYPT AES KEY ---------- */
-    if (!formattedKey) {
-      throw new Error("Private key not properly configured");
-    }
-
     const aesKey = crypto.privateDecrypt(
       {
         key: formattedKey,
@@ -87,54 +73,58 @@ app.post("/", async (req, res) => {
     );
 
     const requestIv = Buffer.from(initial_vector, "base64");
+    
+    // Create response IV by inverting request IV
     const responseIv = Buffer.alloc(requestIv.length);
-    for (let i = 0; i < requestIv.length; i++) responseIv[i] = ~requestIv[i];
+    for (let i = 0; i < requestIv.length; i++) {
+      responseIv[i] = ~requestIv[i];
+    }
 
     /* ---------- DECRYPT PAYLOAD ---------- */
-    const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
     const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
+    
+    // The last 16 bytes are the auth tag
+    const authTag = flowBuffer.slice(-16);
+    const encryptedData = flowBuffer.slice(0, -16);
 
-    // Handle authentication tag
-    let authTag;
-    if (authentication_tag) {
-      authTag = Buffer.from(authentication_tag, "base64");
-    } else {
-      authTag = flowBuffer.slice(-16);
-    }
+    const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
     decipher.setAuthTag(authTag);
-
-    // Decrypt the data
-    let decrypted;
-    if (authentication_tag) {
-      decrypted = decipher.update(flowBuffer, "binary", "utf8") + decipher.final("utf8");
-    } else {
-      decrypted = decipher.update(flowBuffer.slice(0, -16), "binary", "utf8") + decipher.final("utf8");
-    }
+    
+    const decrypted = Buffer.concat([
+      decipher.update(encryptedData),
+      decipher.final()
+    ]).toString("utf8");
 
     const decryptedPayload = JSON.parse(decrypted);
-    const { action, data, flow_token } = decryptedPayload;
+    const { action, data } = decryptedPayload;
 
     /* ---------------- PING ---------------- */
     if (action === "ping") {
+      const responseData = {
+        data: {
+          status: "active"
+        }
+      };
+
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
-      const encrypted = Buffer.concat([
-        cipher.update(JSON.stringify({ 
-          data: { status: "active" }
-        }), "utf8"),
+      const encryptedResponse = Buffer.concat([
+        cipher.update(JSON.stringify(responseData), "utf8"),
         cipher.final()
       ]);
-
-      const response = Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64");
-      return res.status(200).send(response);
+      
+      // Get auth tag and combine
+      const authTag_response = cipher.getAuthTag();
+      const finalResponse = Buffer.concat([encryptedResponse, authTag_response]);
+      
+      return res.status(200).send(finalResponse.toString("base64"));
     }
 
     /* ---------------- COMPLETE (FLOW SUBMIT) ---------------- */
     if (action === "complete") {
-      // Send WhatsApp message asynchronously - don't wait for it
+      // Send WhatsApp message asynchronously
       const parishadId = data?.parishad_id;
       
       if (parishadId) {
-        // Don't await this - let it run in background
         axios.get(
           `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${parishadId}`,
           { headers: ABTYP_HEADERS }
@@ -164,20 +154,23 @@ app.post("/", async (req, res) => {
         });
       }
 
-      // Immediately respond to flow
-      const responsePayload = {
-        version: "3.0",
-        data: { acknowledged: true }
+      // Respond to flow
+      const responseData = {
+        data: {
+          acknowledged: true
+        }
       };
 
       const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
-      const encrypted = Buffer.concat([
-        cipher.update(JSON.stringify(responsePayload), "utf8"),
+      const encryptedResponse = Buffer.concat([
+        cipher.update(JSON.stringify(responseData), "utf8"),
         cipher.final()
       ]);
-
-      const response = Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64");
-      return res.status(200).send(response);
+      
+      const authTag_response = cipher.getAuthTag();
+      const finalResponse = Buffer.concat([encryptedResponse, authTag_response]);
+      
+      return res.status(200).send(finalResponse.toString("base64"));
     }
 
     /* ---------------- DROPDOWN DATA ---------------- */
@@ -189,28 +182,23 @@ app.post("/", async (req, res) => {
       is_parishad_enabled: false
     };
 
-    // Fetch data in parallel for better performance
-    const promises = [];
-
-    // Always fetch countries
-    promises.push(
-      axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS })
-        .then(res => {
-          responseData.country_list = mapList(res.data?.Data);
-        })
-        .catch(err => {
-          console.error("Country fetch error:", err.message);
-        })
-    );
-
-    await Promise.all(promises);
+    // Fetch countries
+    try {
+      const countryRes = await axios.get(
+        "https://api.abtyp.org/v0/country",
+        { headers: ABTYP_HEADERS, timeout: 5000 }
+      );
+      responseData.country_list = mapList(countryRes.data?.Data);
+    } catch (err) {
+      console.error("Country fetch error:", err.message);
+    }
 
     // Fetch states if country selected
     if (data?.country_id) {
       try {
         const stateRes = await axios.get(
           `https://api.abtyp.org/v0/state?CountryId=${data.country_id}`,
-          { headers: ABTYP_HEADERS }
+          { headers: ABTYP_HEADERS, timeout: 5000 }
         );
         responseData.state_list = mapList(stateRes.data?.Data);
         responseData.is_state_enabled = responseData.state_list.length > 0;
@@ -224,7 +212,7 @@ app.post("/", async (req, res) => {
       try {
         const parishadRes = await axios.get(
           `https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`,
-          { headers: ABTYP_HEADERS }
+          { headers: ABTYP_HEADERS, timeout: 5000 }
         );
         responseData.parishad_list = mapList(parishadRes.data?.Data);
         responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
@@ -233,52 +221,75 @@ app.post("/", async (req, res) => {
       }
     }
 
-    const responsePayload = {
+    // Prepare response for flow
+    const flowResponse = {
       version: "3.0",
       screen: "LOCATION_SCREEN",
       data: responseData
     };
 
+    // Encrypt response
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
-    const encrypted = Buffer.concat([
-      cipher.update(JSON.stringify(responsePayload), "utf8"),
+    const encryptedResponse = Buffer.concat([
+      cipher.update(JSON.stringify(flowResponse), "utf8"),
       cipher.final()
     ]);
-
-    const response = Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64");
-    return res.status(200).send(response);
+    
+    const authTag_response = cipher.getAuthTag();
+    const finalResponse = Buffer.concat([encryptedResponse, authTag_response]);
+    
+    return res.status(200).send(finalResponse.toString("base64"));
 
   } catch (err) {
     console.error("Server error:", err.message);
     
-    // Even on error, return 200 with a basic response
-    // This prevents WhatsApp from showing "Failed to load flow"
+    // Even on error, return a valid encrypted response
     try {
-      const responsePayload = {
-        version: "3.0",
-        screen: "LOCATION_SCREEN",
-        data: {
-          country_list: [],
-          state_list: [],
-          parishad_list: [],
-          is_state_enabled: false,
-          is_parishad_enabled: false,
-          error: "Unable to load data"
+      // Recreate responseIv if we have the requestIv
+      if (initial_vector) {
+        const requestIv = Buffer.from(initial_vector, "base64");
+        const responseIv = Buffer.alloc(requestIv.length);
+        for (let i = 0; i < requestIv.length; i++) {
+          responseIv[i] = ~requestIv[i];
         }
-      };
-      
-      // Try to encrypt if we have the necessary components
-      if (aesKey && responseIv) {
-        const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
-        const encrypted = Buffer.concat([
-          cipher.update(JSON.stringify(responsePayload), "utf8"),
-          cipher.final()
-        ]);
-        const response = Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64");
-        return res.status(200).send(response);
+        
+        // Get aesKey again if we have encrypted_aes_key
+        if (encrypted_aes_key) {
+          const aesKey = crypto.privateDecrypt(
+            {
+              key: formattedKey,
+              padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+              oaepHash: "sha256"
+            },
+            Buffer.from(encrypted_aes_key, "base64")
+          );
+          
+          const errorResponse = {
+            version: "3.0",
+            screen: "LOCATION_SCREEN",
+            data: {
+              country_list: [],
+              state_list: [],
+              parishad_list: [],
+              is_state_enabled: false,
+              is_parishad_enabled: false
+            }
+          };
+          
+          const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
+          const encryptedResponse = Buffer.concat([
+            cipher.update(JSON.stringify(errorResponse), "utf8"),
+            cipher.final()
+          ]);
+          
+          const authTag_response = cipher.getAuthTag();
+          const finalResponse = Buffer.concat([encryptedResponse, authTag_response]);
+          
+          return res.status(200).send(finalResponse.toString("base64"));
+        }
       }
     } catch (e) {
-      // If encryption fails, send plain response
+      // If all else fails
       return res.status(200).send("OK");
     }
     
