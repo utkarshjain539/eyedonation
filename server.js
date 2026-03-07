@@ -8,21 +8,21 @@ app.use(express.json());
 /* ---------------- CONFIG ---------------- */
 
 const PHONE_NUMBER_ID = "1049088024951885";
-const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQ5T6BIECcbmVcvvkLploxj88Q1TYaC1nW0W0gYhhRVcZBiqhwVmrBOZCPK3tMbUmJBO90Qx4eRORMasKfJEucnDzue9QCfRoIh96an2Q98rDMgwIOolg1RZBp1yZCVbdzdPPT24SiM8FikM8Ut0AD4V8mWs8BDm2RKOB0TnOqbjyJBEx5cIo7TAipzeLfvpPN4h1ph5FlkVZC8ZAwfppl2ZBvtg5GvQEEejArot";
-const FIXED_RECIPIENT = "918488861504";
+const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQ0W2ZA6NCOzyP81B6g6OBg8pqf8SOVPU2VXSnMbL9vk6AHZBZA2bzAR7cdzcaiWh2SVy3S2zqw6YgiTIXboWKqhqmhMgsXw1Xn2Qw2c1brCya1XQ2M51rWuGN0byNTfwBfHEfpwJPKGbpFp5jYZCYTf2hZBJx2Uf8BTYiQg2waaeAhyKxB2iIB0ZBhrGiDKS5p6fHGUTESZBF9ov6RrXxZAz1pjhKn4IEKx8pvySczskJfgDZCdxEKZCNxpSuuj1UTbTMZCjmuyq0BbCIwQewZDZD";
+const RECIPIENT_NUMBER = "918488861504";
 
 const ABTYP_HEADERS = {
   "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%",
   "Content-Type": "application/json"
 };
 
-/* ---------------- PRIVATE KEY ---------------- */
+/* ---------------- PRIVATE KEY FROM RENDER ENV ---------------- */
 
-const privateKeyInput = process.env.PRIVATE_KEY || "";
+const privateKeyRaw = process.env.PRIVATE_KEY;
 
-const formattedKey = privateKeyInput.includes("BEGIN PRIVATE KEY")
-  ? privateKeyInput.replace(/\\n/g, "\n")
-  : `-----BEGIN PRIVATE KEY-----\n${privateKeyInput}\n-----END PRIVATE KEY-----`;
+const PRIVATE_KEY = privateKeyRaw.includes("BEGIN")
+  ? privateKeyRaw.replace(/\\n/g, "\n")
+  : `-----BEGIN PRIVATE KEY-----\n${privateKeyRaw}\n-----END PRIVATE KEY-----`;
 
 /* ---------------- UTIL ---------------- */
 
@@ -51,15 +51,16 @@ app.post("/", async (req, res) => {
       authentication_tag
     } = req.body;
 
+    /* Health check requests */
     if (!encrypted_aes_key) {
       return res.status(200).send("OK");
     }
 
-    /* ---------- DECRYPT AES KEY ---------- */
+    /* ---------------- DECRYPT AES KEY ---------------- */
 
     const aesKey = crypto.privateDecrypt(
       {
-        key: formattedKey,
+        key: PRIVATE_KEY,
         padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
         oaepHash: "sha256"
       },
@@ -69,35 +70,28 @@ app.post("/", async (req, res) => {
     const requestIv = Buffer.from(initial_vector, "base64");
 
     const responseIv = Buffer.alloc(requestIv.length);
+
     for (let i = 0; i < requestIv.length; i++) {
       responseIv[i] = ~requestIv[i];
     }
 
-    /* ---------- DECRYPT PAYLOAD ---------- */
+    /* ---------------- DECRYPT FLOW PAYLOAD ---------------- */
 
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
 
     const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
 
-    decipher.setAuthTag(
-      authentication_tag
-        ? Buffer.from(authentication_tag, "base64")
-        : flowBuffer.slice(-16)
-    );
+    decipher.setAuthTag(Buffer.from(authentication_tag, "base64"));
 
     const decrypted =
-      decipher.update(
-        authentication_tag ? flowBuffer : flowBuffer.slice(0, -16),
-        "binary",
-        "utf8"
-      ) + decipher.final("utf8");
+      decipher.update(flowBuffer, "binary", "utf8") + decipher.final("utf8");
 
-    const decryptedPayload = JSON.parse(decrypted);
+    const payload = JSON.parse(decrypted);
 
-    console.log("FLOW PAYLOAD:", decryptedPayload);
+    console.log("FLOW PAYLOAD:", payload);
 
-    const action = decryptedPayload.action || "";
-    const data = decryptedPayload.data || {};
+    const action = payload.action || "";
+    const data = payload.data || {};
 
     /* ---------------- PING ---------------- */
 
@@ -115,7 +109,7 @@ app.post("/", async (req, res) => {
         .send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
     }
 
-    /* ---------------- DROPDOWN DATA ---------------- */
+    /* ---------------- DROPDOWN RESPONSE ---------------- */
 
     let responseData = {
       country_list: [],
@@ -125,7 +119,7 @@ app.post("/", async (req, res) => {
       is_parishad_enabled: false
     };
 
-    /* -------- COUNTRY -------- */
+    /* COUNTRY */
 
     const countryRes = await axios.get(
       "https://api.abtyp.org/v0/country",
@@ -134,7 +128,7 @@ app.post("/", async (req, res) => {
 
     responseData.country_list = mapList(countryRes.data?.Data);
 
-    /* -------- STATE -------- */
+    /* STATE */
 
     if (data.country_id) {
 
@@ -145,10 +139,9 @@ app.post("/", async (req, res) => {
 
       responseData.state_list = mapList(stateRes.data?.Data);
       responseData.is_state_enabled = true;
-
     }
 
-    /* -------- PARISHAD -------- */
+    /* PARISHAD */
 
     if (data.state_id) {
 
@@ -159,10 +152,9 @@ app.post("/", async (req, res) => {
 
       responseData.parishad_list = mapList(parishadRes.data?.Data);
       responseData.is_parishad_enabled = true;
-
     }
 
-    /* -------- SEND WHATSAPP LINK -------- */
+    /* ---------------- SEND GROUP LINK ---------------- */
 
     if (data.parishad_id) {
 
@@ -185,7 +177,7 @@ app.post("/", async (req, res) => {
             `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
             {
               messaging_product: "whatsapp",
-              to: FIXED_RECIPIENT,
+              to: RECIPIENT_NUMBER,
               type: "text",
               text: {
                 body: `Welcome to ABTYP 🙏
@@ -215,7 +207,7 @@ ${groupLink}`
 
     }
 
-    /* ---------------- RESPONSE ---------------- */
+    /* ---------------- ENCRYPT RESPONSE ---------------- */
 
     const responsePayload = {
       version: "3.0",
@@ -239,7 +231,6 @@ ${groupLink}`
     console.log("SERVER ERROR:", err.message);
 
     return res.status(500).send("Error");
-
   }
 
 });
@@ -247,5 +238,5 @@ ${groupLink}`
 /* ---------------- START SERVER ---------------- */
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("ABTYP WhatsApp Flow Server Running");
+  console.log("🚀 ABTYP Flow Server Running");
 });
