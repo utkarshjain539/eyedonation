@@ -38,7 +38,6 @@ try {
   console.log("Private key formatted successfully");
 } catch (err) {
   console.error("Error formatting private key:", err);
-  // Provide a fallback - this will still fail but won't crash
   formattedKey = privateKeyInput;
 }
 
@@ -78,6 +77,8 @@ app.post("/", async (req, res) => {
   try {
     /* ---------- DECRYPT AES KEY ---------- */
     let aesKey;
+    let requestIv;
+    
     try {
       aesKey = crypto.privateDecrypt(
         {
@@ -87,31 +88,16 @@ app.post("/", async (req, res) => {
         },
         Buffer.from(encrypted_aes_key, "base64")
       );
+      
+      requestIv = Buffer.from(initial_vector, "base64");
     } catch (decryptErr) {
       console.error("Private key decryption failed:", decryptErr.message);
       
-      // Even on error, return a valid encrypted response
-      // Create a dummy response that will show an error in the flow
-      const dummyResponse = {
-        version: "3.0",
-        screen: "LOCATION_SCREEN",
-        data: {
-          country_list: [],
-          state_list: [],
-          parishad_list: [],
-          is_state_enabled: false,
-          is_parishad_enabled: false,
-          error: "Configuration error. Please contact support."
-        }
-      };
-      
-      // Use a dummy key for encryption (this will still fail but we need to return something)
-      // In practice, you should never reach here if key is properly configured
-      return res.status(200).send(Buffer.from(JSON.stringify(dummyResponse)).toString("base64"));
+      // Return a simple OK response for ping-like requests
+      // This won't work for actual flow requests but will prevent crashes
+      return res.status(200).send("OK");
     }
 
-    const requestIv = Buffer.from(initial_vector, "base64");
-    
     // Create response IV by inverting request IV
     const responseIv = Buffer.alloc(requestIv.length);
     for (let i = 0; i < requestIv.length; i++) {
@@ -282,55 +268,8 @@ app.post("/", async (req, res) => {
   } catch (err) {
     console.error("Server error:", err.message);
     
-    // Even on error, return a valid response
-    // Try to create a minimal valid response
-    try {
-      // If we have the necessary components, try to encrypt
-      if (encrypted_aes_key && initial_vector) {
-        const requestIv = Buffer.from(initial_vector, "base64");
-        const responseIv = Buffer.alloc(requestIv.length);
-        for (let i = 0; i < requestIv.length; i++) {
-          responseIv[i] = ~requestIv[i];
-        }
-        
-        // Try to decrypt the AES key again
-        const aesKey = crypto.privateDecrypt(
-          {
-            key: formattedKey,
-            padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-            oaepHash: "sha256"
-          },
-          Buffer.from(encrypted_aes_key, "base64")
-        );
-        
-        const errorResponse = {
-          version: "3.0",
-          screen: "LOCATION_SCREEN",
-          data: {
-            country_list: [],
-            state_list: [],
-            parishad_list: [],
-            is_state_enabled: false,
-            is_parishad_enabled: false
-          }
-        };
-        
-        const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
-        const encryptedResponse = Buffer.concat([
-          cipher.update(JSON.stringify(errorResponse), "utf8"),
-          cipher.final()
-        ]);
-        
-        const authTag_response = cipher.getAuthTag();
-        const finalResponse = Buffer.concat([encryptedResponse, authTag_response]);
-        
-        return res.status(200).send(finalResponse.toString("base64"));
-      }
-    } catch (e) {
-      // If all encryption fails, return a plain text response (WhatsApp might still accept this for ping)
-      return res.status(200).send("OK");
-    }
-    
+    // For any error, return OK for ping requests
+    // This won't work for actual flow requests but prevents crashes
     return res.status(200).send("OK");
   }
 });
