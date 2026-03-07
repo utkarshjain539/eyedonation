@@ -5,9 +5,7 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
-console.log("🚀 ABTYP Flow Server Started");
-
-/* CONFIG */
+/* ---------------- CONFIG ---------------- */
 
 const PHONE_NUMBER_ID = "1049088024951885";
 const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQ5r82aTIDV1kLlxsPQepUD1qM4pxuj7bkIahNAdxInEMrfI9IAjN5ETQTJfqRflZB35Xz886dTeY1kjpFgCSAO21urWYwKTWc9zRJTcVlwxGicKAvBErqcdUKvm6htda7fSMIwc0deWWFF2pf6Mmp2U2d9U4rLfF2D0vKVNY5GZBiHegRv2PPt8SB4hPBnhR8HOWWIeU8WYEUxZA5z192pykrwyF1k7ZBBpayoRelBGVhpFnUYUZBvc1IPUJFuDnO1NZCr765EZAZCba";
@@ -18,7 +16,7 @@ const ABTYP_HEADERS = {
   "Content-Type": "application/json"
 };
 
-/* PRIVATE KEY */
+/* ---------------- PRIVATE KEY ---------------- */
 
 const privateKeyInput = process.env.PRIVATE_KEY || "";
 
@@ -26,7 +24,7 @@ const formattedKey = privateKeyInput.includes("BEGIN PRIVATE KEY")
   ? privateKeyInput.replace(/\\n/g, "\n")
   : `-----BEGIN PRIVATE KEY-----\n${privateKeyInput}\n-----END PRIVATE KEY-----`;
 
-/* UTIL */
+/* ---------------- UTIL ---------------- */
 
 const mapList = (arr) =>
   (arr || []).map((item) => ({
@@ -34,23 +32,30 @@ const mapList = (arr) =>
     title: item.Name
   }));
 
-/* HEALTH CHECK */
+/* ---------------- HEALTH CHECK ---------------- */
 
 app.get("/", (req, res) => {
   res.send("ABTYP WhatsApp Flow Server Running");
 });
 
-/* FLOW ENDPOINT */
+/* ---------------- FLOW ENDPOINT ---------------- */
 
 app.post("/", async (req, res) => {
 
-  const { encrypted_aes_key, encrypted_flow_data, initial_vector, authentication_tag } = req.body;
-
-  if (!encrypted_aes_key) return res.status(200).send("OK");
-
   try {
 
-    /* DECRYPT KEY */
+    const {
+      encrypted_aes_key,
+      encrypted_flow_data,
+      initial_vector,
+      authentication_tag
+    } = req.body;
+
+    if (!encrypted_aes_key) {
+      return res.status(200).send("OK");
+    }
+
+    /* ---------- DECRYPT AES KEY ---------- */
 
     const aesKey = crypto.privateDecrypt(
       {
@@ -64,9 +69,11 @@ app.post("/", async (req, res) => {
     const requestIv = Buffer.from(initial_vector, "base64");
 
     const responseIv = Buffer.alloc(requestIv.length);
-    for (let i = 0; i < requestIv.length; i++) responseIv[i] = ~requestIv[i];
+    for (let i = 0; i < requestIv.length; i++) {
+      responseIv[i] = ~requestIv[i];
+    }
 
-    /* DECRYPT FLOW DATA */
+    /* ---------- DECRYPT PAYLOAD ---------- */
 
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
 
@@ -85,13 +92,30 @@ app.post("/", async (req, res) => {
         "utf8"
       ) + decipher.final("utf8");
 
-    const payload = JSON.parse(decrypted);
+    const decryptedPayload = JSON.parse(decrypted);
 
-    const { data } = payload;
+    console.log("FLOW PAYLOAD:", decryptedPayload);
 
-    console.log("FLOW DATA:", data);
+    const action = decryptedPayload.action || "";
+    const data = decryptedPayload.data || {};
 
-    /* DROPDOWN RESPONSE */
+    /* ---------------- PING ---------------- */
+
+    if (action === "ping") {
+
+      const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, responseIv);
+
+      const encrypted = Buffer.concat([
+        cipher.update(JSON.stringify({ data: { status: "active" } }), "utf8"),
+        cipher.final()
+      ]);
+
+      return res
+        .status(200)
+        .send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
+    }
+
+    /* ---------------- DROPDOWN DATA ---------------- */
 
     let responseData = {
       country_list: [],
@@ -101,7 +125,7 @@ app.post("/", async (req, res) => {
       is_parishad_enabled: false
     };
 
-    /* COUNTRY */
+    /* -------- COUNTRY -------- */
 
     const countryRes = await axios.get(
       "https://api.abtyp.org/v0/country",
@@ -110,7 +134,7 @@ app.post("/", async (req, res) => {
 
     responseData.country_list = mapList(countryRes.data?.Data);
 
-    /* STATE */
+    /* -------- STATE -------- */
 
     if (data.country_id) {
 
@@ -121,9 +145,10 @@ app.post("/", async (req, res) => {
 
       responseData.state_list = mapList(stateRes.data?.Data);
       responseData.is_state_enabled = true;
+
     }
 
-    /* PARISHAD */
+    /* -------- PARISHAD -------- */
 
     if (data.state_id) {
 
@@ -134,48 +159,63 @@ app.post("/", async (req, res) => {
 
       responseData.parishad_list = mapList(parishadRes.data?.Data);
       responseData.is_parishad_enabled = true;
+
     }
 
-    /* SEND WHATSAPP WHEN PARISHAD SELECTED */
+    /* -------- SEND WHATSAPP LINK -------- */
 
     if (data.parishad_id) {
 
       console.log("PARISHAD SELECTED:", data.parishad_id);
 
-      const linkRes = await axios.get(
-        `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`,
-        { headers: ABTYP_HEADERS }
-      );
+      try {
 
-      const groupLink = linkRes.data?.Data?.WhatsAppGroupLink;
-
-      if (groupLink) {
-
-        console.log("SENDING WHATSAPP TO:", FIXED_RECIPIENT);
-
-        await axios.post(
-          `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
-          {
-            messaging_product: "whatsapp",
-            to: FIXED_RECIPIENT,
-            type: "text",
-            text: {
-              body: `Welcome to ABTYP 🙏\n\nHere is your Parishad WhatsApp Group Link:\n\n${groupLink}`
-            }
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-              "Content-Type": "application/json"
-            }
-          }
+        const linkRes = await axios.get(
+          `https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`,
+          { headers: ABTYP_HEADERS }
         );
 
-        console.log("✅ WhatsApp Message Sent");
+        const groupLink = linkRes.data?.Data?.WhatsAppGroupLink;
+
+        console.log("GROUP LINK:", groupLink);
+
+        if (groupLink) {
+
+          await axios.post(
+            `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
+            {
+              messaging_product: "whatsapp",
+              to: FIXED_RECIPIENT,
+              type: "text",
+              text: {
+                body: `Welcome to ABTYP 🙏
+
+Here is your Parishad WhatsApp Group Link:
+
+${groupLink}`
+              }
+            },
+            {
+              headers: {
+                Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+                "Content-Type": "application/json"
+              }
+            }
+          );
+
+          console.log("WHATSAPP MESSAGE SENT");
+
+        }
+
+      } catch (err) {
+
+        console.log("WHATSAPP ERROR:", err.response?.data || err.message);
+
       }
+
     }
 
-    /* RESPONSE */
+    /* ---------------- RESPONSE ---------------- */
 
     const responsePayload = {
       version: "3.0",
@@ -190,20 +230,22 @@ app.post("/", async (req, res) => {
       cipher.final()
     ]);
 
-    return res.status(200).send(
-      Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64")
-    );
+    return res
+      .status(200)
+      .send(Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64"));
 
   } catch (err) {
 
-    console.error("SERVER ERROR:", err);
+    console.log("SERVER ERROR:", err.message);
 
     return res.status(500).send("Error");
+
   }
+
 });
 
-/* START SERVER */
+/* ---------------- START SERVER ---------------- */
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🚀 Server Running");
+  console.log("ABTYP WhatsApp Flow Server Running");
 });
