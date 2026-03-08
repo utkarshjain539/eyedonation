@@ -32,7 +32,7 @@ const encryptResponse = (data, aesKey, iv) => {
   return Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64");
 };
 
-/* ---------------- ENDPOINT ---------------- */
+/* ---------------- MAIN ENDPOINT ---------------- */
 app.post("/", async (req, res) => {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = req.body;
   if (!encrypted_aes_key) return res.status(200).send("OK");
@@ -46,15 +46,18 @@ app.post("/", async (req, res) => {
     const requestIv = Buffer.from(initial_vector, "base64");
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
     decipher.setAuthTag(flowBuffer.slice(-16));
+    
     const decrypted = Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8");
     const { action, data } = JSON.parse(decrypted);
 
-    console.log(`\n>>> ACTION RECEIVED: ${action}`);
+    console.log(`\n[TRACE] Action: ${action}`);
+    if (data) console.log(`[TRACE] Incoming Data: ${JSON.stringify(data)}`);
 
     if (action === "ping") {
       return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, requestIv));
     }
 
+    // Handle Dropdowns
     if (action === "INIT" || action === "data_exchange") {
       let resp = { version: "3.0", screen: "LOCATION_SCREEN", data: { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false } };
       
@@ -62,43 +65,54 @@ app.post("/", async (req, res) => {
       resp.data.country_list = mapList(cRes.data?.Data);
 
       if (data?.country_id) {
+        console.log(`[TRACE] Fetching states for Country: ${data.country_id}`);
         const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
         resp.data.state_list = mapList(sRes.data?.Data);
         resp.data.is_state_enabled = resp.data.state_list.length > 0;
       }
+      
       if (data?.state_id) {
+        console.log(`[TRACE] Fetching parishads for State: ${data.state_id}`);
         const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
         resp.data.parishad_list = mapList(pRes.data?.Data);
         resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
       }
+
       return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
     }
 
+    // Handle Final Submission
     if (action === "complete") {
-      const pId = data?.parishad_id;
-      console.log(`>>> COMPLETE ACTION: User selected Parishad ID: ${pId}`);
+      const pId = data?.selected_parishad;
+      console.log(`[CRITICAL] Submit Clicked! Parishad ID is: "${pId}"`);
 
-      if (pId) {
+      if (!pId) {
+        console.error("[CRITICAL] ERROR: Parishad ID is NULL or Undefined at submission!");
+      } else {
         // FETCH LINK
-        const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${pId}`, { headers: ABTYP_HEADERS });
-        const link = linkRes.data?.Data?.WhatsAppGroupLink;
-        
-        console.log(`>>> API RESULT: Link found? ${link ? "YES" : "NO"}`);
+        try {
+          console.log(`[API] Calling ABTYP Link API for ID: ${pId}`);
+          const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${pId}`, { headers: ABTYP_HEADERS });
+          const link = linkRes.data?.Data?.WhatsAppGroupLink;
+          
+          console.log(`[API] Link Result: ${link || "NOT FOUND"}`);
 
-        if (link) {
-          // SEND WHATSAPP
-          await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
-            messaging_product: "whatsapp", to: FIXED_RECIPIENT, type: "text",
-            text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad Link: ${link}` }
-          }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
-          console.log(">>> SUCCESS: Message sent to user!");
+          if (link) {
+            const waRes = await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
+              messaging_product: "whatsapp", to: FIXED_RECIPIENT, type: "text",
+              text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad Link: ${link}` }
+            }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
+            console.log(`[SUCCESS] WhatsApp sent! ID: ${waRes.data?.messages?.[0]?.id}`);
+          }
+        } catch (apiErr) {
+          console.error(`[ERROR] API or WhatsApp failure: ${apiErr.message}`);
         }
       }
       return res.status(200).send(encryptResponse({ data: { acknowledged: true } }, aesKey, requestIv));
     }
 
   } catch (err) {
-    console.error("!!! ERROR:", err.response?.data || err.message);
+    console.error(`[FATAL] Server Error: ${err.message}`);
     return res.status(400).send("Error");
   }
 });
