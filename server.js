@@ -10,7 +10,7 @@ const ABTYP_HEADERS = {
   "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%",
   "Content-Type": "application/json"
 };
- 
+
 const PHONE_NUMBER_ID = "1049088024951885";
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN; 
 const FIXED_RECIPIENT = "918488861504";
@@ -40,12 +40,13 @@ const encryptResponse = (data, aesKey, iv) => {
   return Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64");
 };
 
-/* ---------------- ENDPOINT ---------------- */
+/* ---------------- MAIN ENDPOINT ---------------- */
 app.post("/", async (req, res) => {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = req.body;
   if (!encrypted_aes_key) return res.status(200).send("OK");
 
   try {
+    // 1. Decrypt Keys
     const aesKey = crypto.privateDecrypt({
       key: formattedKey,
       padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
@@ -60,7 +61,12 @@ app.post("/", async (req, res) => {
     const decrypted = Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8");
     const { action, data, screen } = JSON.parse(decrypted);
 
-    // Default structure to avoid "Decrypted response not as expected"
+    // --- CASE A: PING (META HEALTH CHECK) ---
+    if (action === "ping") {
+      return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, requestIv));
+    }
+
+    // --- CASE B: SCREEN INTERACTIONS (INIT / DATA_EXCHANGE) ---
     let responsePayload = { 
       version: "3.0", 
       screen: screen || "LOCATION_SCREEN", 
@@ -74,45 +80,31 @@ app.post("/", async (req, res) => {
     };
 
     if (action === "INIT" || action === "data_exchange") {
-      // 1. Fetch Countries - This MUST succeed for the first screen to load
       try {
-        const countryRes = await axios.get("https://api.abtyp.org/v0/country", { 
-          headers: ABTYP_HEADERS,
-          timeout: 5000 // Add a timeout
-        });
-        
-        const countries = mapList(countryRes.data?.Data);
-        
-        // If API is empty, provide a fallback so the Flow doesn't crash
-        responsePayload.data.country_list = countries.length > 0 
-          ? countries 
-          : [{ id: "100", title: "India" }]; 
-
+        const countryRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS, timeout: 5000 });
+        responsePayload.data.country_list = mapList(countryRes.data?.Data);
       } catch (e) {
-        console.error("Country Fetch Failed:", e.message);
-        // CRITICAL: Provide a fallback item so the Flow can at least open
         responsePayload.data.country_list = [{ id: "100", title: "India" }];
       }
 
-      // 2. Handle State Selection
       if (data?.country_id) {
         try {
           const stateRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
           responsePayload.data.state_list = mapList(stateRes.data?.Data);
           responsePayload.data.is_state_enabled = responsePayload.data.state_list.length > 0;
-        } catch (e) { console.error("State Fetch Failed"); }
+        } catch (e) {}
       }
 
-      // 3. Handle Parishad Selection
       if (data?.state_id) {
         try {
           const parishadRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
           responsePayload.data.parishad_list = mapList(parishadRes.data?.Data);
           responsePayload.data.is_parishad_enabled = responsePayload.data.parishad_list.length > 0;
-        } catch (e) { console.error("Parishad Fetch Failed"); }
+        } catch (e) {}
       }
-    }
+    } 
     
+    // --- CASE C: COMPLETE (SUBMISSION) ---
     else if (action === "complete") {
       const pId = data?.parishad_id;
       if (pId) {
@@ -121,13 +113,11 @@ app.post("/", async (req, res) => {
             const link = linkRes.data?.Data?.WhatsAppGroupLink;
             if (link) {
               return axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
-                messaging_product: "whatsapp",
-                to: FIXED_RECIPIENT,
-                type: "text",
-                text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad WhatsApp Group Link: ${link}` }
+                messaging_product: "whatsapp", to: FIXED_RECIPIENT, type: "text",
+                text: { body: `Welcome to ABTYP 🙏\n\nYour Link: ${link}` }
               }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
             }
-          }).catch(e => console.error("WA Send Error:", e.response?.data || e.message));
+          }).catch(e => console.error("WA Send Error:", e.message));
       }
       responsePayload.data = { acknowledged: true };
     }
@@ -135,9 +125,10 @@ app.post("/", async (req, res) => {
     return res.status(200).send(encryptResponse(responsePayload, aesKey, requestIv));
 
   } catch (err) {
-    console.error("Server Error:", err.message);
+    console.error("Critical Error:", err.message);
     return res.status(400).send("Decryption Failed");
   }
 });
 
-app.listen(process.env.PORT || 3000);
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
