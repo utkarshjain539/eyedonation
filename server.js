@@ -6,11 +6,16 @@ const app = express();
 app.use(express.json());
 
 /* ---------------- CONFIG ---------------- */
-const ABTYP_HEADERS = { "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%", "Content-Type": "application/json" };
+const ABTYP_HEADERS = { 
+  "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%", 
+  "Content-Type": "application/json" 
+};
+
 const PHONE_NUMBER_ID = "1049088024951885";
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN; 
 const FIXED_RECIPIENT = "918488861504";
 
+// Private Key Handling
 const privateKeyInput = process.env.PRIVATE_KEY || "";
 let formattedKey;
 if (privateKeyInput.includes("BEGIN PRIVATE KEY")) {
@@ -22,7 +27,10 @@ if (privateKeyInput.includes("BEGIN PRIVATE KEY")) {
 }
 
 /* ---------------- HELPERS ---------------- */
-const mapList = (arr) => (arr || []).map(item => ({ id: item.Id?.toString() || "", title: item.Name || "" }));
+const mapList = (arr) => (arr || []).map(item => ({ 
+  id: item.Id?.toString() || "", 
+  title: item.Name || "" 
+}));
 
 const encryptResponse = (data, aesKey, iv) => {
   const invertedIv = Buffer.alloc(iv.length);
@@ -39,7 +47,9 @@ app.post("/", async (req, res) => {
 
   try {
     const aesKey = crypto.privateDecrypt({
-      key: formattedKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256"
+      key: formattedKey, 
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, 
+      oaepHash: "sha256"
     }, Buffer.from(encrypted_aes_key, "base64"));
 
     const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
@@ -50,29 +60,31 @@ app.post("/", async (req, res) => {
     const decrypted = Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8");
     const { action, data } = JSON.parse(decrypted);
 
-    console.log(`\n[TRACE] Action: ${action}`);
-    if (data) console.log(`[TRACE] Incoming Data: ${JSON.stringify(data)}`);
+    console.log(`\n[TRACE] Action: ${action} | Data: ${JSON.stringify(data)}`);
 
+    // 1. Handle Meta Ping
     if (action === "ping") {
       return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, requestIv));
     }
 
-    // Handle Dropdowns
+    // 2. Handle Dropdowns (INIT & data_exchange)
     if (action === "INIT" || action === "data_exchange") {
-      let resp = { version: "3.0", screen: "LOCATION_SCREEN", data: { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false } };
+      let resp = { 
+        version: "3.0", 
+        screen: "LOCATION_SCREEN", 
+        data: { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false } 
+      };
       
       const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
       resp.data.country_list = mapList(cRes.data?.Data);
 
       if (data?.country_id) {
-        console.log(`[TRACE] Fetching states for Country: ${data.country_id}`);
         const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
         resp.data.state_list = mapList(sRes.data?.Data);
         resp.data.is_state_enabled = resp.data.state_list.length > 0;
       }
       
       if (data?.state_id) {
-        console.log(`[TRACE] Fetching parishads for State: ${data.state_id}`);
         const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
         resp.data.parishad_list = mapList(pRes.data?.Data);
         resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
@@ -81,40 +93,44 @@ app.post("/", async (req, res) => {
       return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
     }
 
-    // Handle Final Submission
+    // 3. Handle Final "complete" Action
     if (action === "complete") {
-      const pId = data?.selected_parishad;
-      console.log(`[CRITICAL] Submit Clicked! Parishad ID is: "${pId}"`);
+      const pId = data?.selected_parishad_id;
+      console.log(`[CRITICAL] SUBMIT RECEIVED! Parishad ID: "${pId}"`);
 
-      if (!pId) {
-        console.error("[CRITICAL] ERROR: Parishad ID is NULL or Undefined at submission!");
-      } else {
-        // FETCH LINK
+      if (pId) {
         try {
-          console.log(`[API] Calling ABTYP Link API for ID: ${pId}`);
+          // Fetch the group link
           const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${pId}`, { headers: ABTYP_HEADERS });
-          const link = linkRes.data?.Data?.WhatsAppGroupLink;
-          
-          console.log(`[API] Link Result: ${link || "NOT FOUND"}`);
+          const groupLink = linkRes.data?.Data?.WhatsAppGroupLink;
+          console.log(`[API] Link for ID ${pId}: ${groupLink || "NOT FOUND"}`);
 
-          if (link) {
-            const waRes = await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
-              messaging_product: "whatsapp", to: FIXED_RECIPIENT, type: "text",
-              text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad Link: ${link}` }
+          if (groupLink) {
+            // Send the WhatsApp Message
+            await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
+              messaging_product: "whatsapp", 
+              to: FIXED_RECIPIENT, 
+              type: "text",
+              text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad Link: ${groupLink}` }
             }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
-            console.log(`[SUCCESS] WhatsApp sent! ID: ${waRes.data?.messages?.[0]?.id}`);
+            
+            console.log(`[SUCCESS] Message sent to ${FIXED_RECIPIENT}`);
           }
         } catch (apiErr) {
-          console.error(`[ERROR] API or WhatsApp failure: ${apiErr.message}`);
+          console.error(`[ERROR] Processing failed: ${apiErr.message}`);
         }
+      } else {
+        console.error("[ERROR] Action 'complete' reached but no parishad ID was in the payload.");
       }
+
       return res.status(200).send(encryptResponse({ data: { acknowledged: true } }, aesKey, requestIv));
     }
 
   } catch (err) {
-    console.error(`[FATAL] Server Error: ${err.message}`);
+    console.error(`[FATAL] Error: ${err.message}`);
     return res.status(400).send("Error");
   }
 });
 
-app.listen(process.env.PORT || 3000);
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 ABTYP Flow Server online on ${PORT}`));
