@@ -45,6 +45,8 @@ app.post("/", async (req, res) => {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = req.body;
   if (!encrypted_aes_key) return res.status(200).send("OK");
 
+  console.log("\n--- NEW FLOW REQUEST ---");
+
   try {
     // 1. Decrypt Keys
     const aesKey = crypto.privateDecrypt({
@@ -59,31 +61,33 @@ app.post("/", async (req, res) => {
     decipher.setAuthTag(flowBuffer.slice(-16));
     
     const decrypted = Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8");
-    const { action, data, screen } = JSON.parse(decrypted);
+    const payload = JSON.parse(decrypted);
+    const { action, data, screen } = payload;
 
-    // --- CASE A: PING (META HEALTH CHECK) ---
+    console.log(`[FLOW] Action: ${action} | Screen: ${screen}`);
+    if (data) console.log(`[FLOW] Data received:`, JSON.stringify(data));
+
+    // --- CASE A: PING ---
     if (action === "ping") {
+      console.log("[DEBUG] Responding to Ping test");
       return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, requestIv));
     }
 
-    // --- CASE B: SCREEN INTERACTIONS (INIT / DATA_EXCHANGE) ---
+    // --- CASE B: SCREEN INTERACTIONS ---
     let responsePayload = { 
       version: "3.0", 
       screen: screen || "LOCATION_SCREEN", 
-      data: {
-        country_list: [],
-        state_list: [],
-        parishad_list: [],
-        is_state_enabled: false,
-        is_parishad_enabled: false
-      } 
+      data: { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false } 
     };
 
     if (action === "INIT" || action === "data_exchange") {
+      console.log("[DEBUG] Fetching dropdown data from ABTYP API...");
       try {
         const countryRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS, timeout: 5000 });
         responsePayload.data.country_list = mapList(countryRes.data?.Data);
+        console.log(`[API] Countries found: ${responsePayload.data.country_list.length}`);
       } catch (e) {
+        console.error("[API ERROR] Country fetch failed:", e.message);
         responsePayload.data.country_list = [{ id: "100", title: "India" }];
       }
 
@@ -92,7 +96,8 @@ app.post("/", async (req, res) => {
           const stateRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
           responsePayload.data.state_list = mapList(stateRes.data?.Data);
           responsePayload.data.is_state_enabled = responsePayload.data.state_list.length > 0;
-        } catch (e) {}
+          console.log(`[API] States found: ${responsePayload.data.state_list.length}`);
+        } catch (e) { console.error("[API ERROR] State fetch failed"); }
       }
 
       if (data?.state_id) {
@@ -100,35 +105,56 @@ app.post("/", async (req, res) => {
           const parishadRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
           responsePayload.data.parishad_list = mapList(parishadRes.data?.Data);
           responsePayload.data.is_parishad_enabled = responsePayload.data.parishad_list.length > 0;
-        } catch (e) {}
+          console.log(`[API] Parishads found: ${responsePayload.data.parishad_list.length}`);
+        } catch (e) { console.error("[API ERROR] Parishad fetch failed"); }
       }
     } 
     
-    // --- CASE C: COMPLETE (SUBMISSION) ---
+    // --- CASE C: COMPLETE (THE CRITICAL PART) ---
     else if (action === "complete") {
       const pId = data?.parishad_id;
+      console.log(`[SUBMIT] Final Parishad selected: ${pId}`);
+
       if (pId) {
-        axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${pId}`, { headers: ABTYP_HEADERS })
-          .then(linkRes => {
-            const link = linkRes.data?.Data?.WhatsAppGroupLink;
-            if (link) {
-              return axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
-                messaging_product: "whatsapp", to: FIXED_RECIPIENT, type: "text",
-                text: { body: `Welcome to ABTYP 🙏\n\nYour Link: ${link}` }
-              }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
-            }
-          }).catch(e => console.error("WA Send Error:", e.message));
+        console.log(`[SUBMIT] Fetching group link for Parishad: ${pId}`);
+        
+        // Use async/await here so we can log the response before completing
+        try {
+          const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${pId}`, { headers: ABTYP_HEADERS });
+          const link = linkRes.data?.Data?.WhatsAppGroupLink;
+          
+          if (link) {
+            console.log(`[SUBMIT] Link found: ${link}. Sending message to Meta...`);
+            
+            const waRes = await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
+              messaging_product: "whatsapp",
+              to: FIXED_RECIPIENT,
+              type: "text",
+              text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad WhatsApp Group Link: ${link}` }
+            }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
+
+            console.log(`[META] Message sent successfully! ID: ${waRes.data?.messages?.[0]?.id}`);
+          } else {
+            console.warn(`[WARN] No link found in ABTYP API response for Parishad ${pId}`);
+          }
+        } catch (e) {
+          console.error("[FATAL] Message failed to send.");
+          console.error("Details:", e.response?.data || e.message);
+        }
+      } else {
+        console.warn("[WARN] Action 'complete' triggered but parishad_id was missing from payload.");
       }
+      
       responsePayload.data = { acknowledged: true };
     }
 
     return res.status(200).send(encryptResponse(responsePayload, aesKey, requestIv));
 
   } catch (err) {
-    console.error("Critical Error:", err.message);
+    console.error("[CRITICAL] Decryption or Logic Error:", err.message);
     return res.status(400).send("Decryption Failed");
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 ABTYP Server Live on port ${PORT}`));
