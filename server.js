@@ -13,10 +13,9 @@ const ABTYP_HEADERS = {
 };
 
 const PHONE_NUMBER_ID = "1049088024951885";
-const WHATSAPP_TOKEN = "EAAb2OhvJlfEBQ7GPyJIbCJ58UxERvokk7ZBqSJqSkZCHYlj79UaSb4NYsqI4NzE3QqJtiv6vzXHQTpsY2P77xUKW5jdZACFDkspNMyUcMEVuWajczciav3ieq6ZCZCA0PQbf9ZC5bEZCH4WLWWg9HLi0JZAEKKtJsXZAq5jk3TZAkq57K8YB43128MVLX3SAOoeZCUhX9KPP7czfqJwYuSmioAKGHANR7gcamJJ2lfFrhycvD869BH0SQLogjby707ebb7BLIY1DzWBZA7ZBZBuLYivlZAvaNjD";
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN; // Use System User Permanent Token
 const FIXED_RECIPIENT = "918488861504";
 
-// Private Key Handling
 const privateKeyInput = process.env.PRIVATE_KEY || "";
 let formattedKey;
 
@@ -28,142 +27,91 @@ if (privateKeyInput.includes("BEGIN PRIVATE KEY")) {
   formattedKey = `-----BEGIN PRIVATE KEY-----\n${keyLines.join('\n')}\n-----END PRIVATE KEY-----\n`;
 }
 
-/* ---------------- UTIL ---------------- */
+/* ---------------- HELPERS ---------------- */
 
-const mapList = (arr) =>
-  (arr || []).map((item) => ({
-    id: item.Id?.toString() || "",
-    title: item.Name || ""
-  }));
+const mapList = (arr) => (arr || []).map(item => ({
+  id: item.Id?.toString() || "",
+  title: item.Name || ""
+}));
 
 const encryptResponse = (data, aesKey, iv) => {
   const invertedIv = Buffer.alloc(iv.length);
-  for (let i = 0; i < iv.length; i++) {
-    invertedIv[i] = ~iv[i];
-  }
+  for (let i = 0; i < iv.length; i++) invertedIv[i] = ~iv[i];
 
   const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, invertedIv);
-  const encrypted = Buffer.concat([
-    cipher.update(JSON.stringify(data), "utf8"),
-    cipher.final()
-  ]);
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(data), "utf8"), cipher.final()]);
   return Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64");
 };
 
-/* ---------------- FLOW ENDPOINT ---------------- */
+/* ---------------- ENDPOINT ---------------- */
 
 app.post("/", async (req, res) => {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = req.body;
 
-  if (!encrypted_aes_key || !encrypted_flow_data || !initial_vector) {
-    return res.status(200).send("OK"); // Health check/Ping from Meta
-  }
-
-  let aesKey;
-  const requestIv = Buffer.from(initial_vector, "base64");
+  if (!encrypted_aes_key) return res.status(200).send("OK");
 
   try {
-    // 1. Decrypt AES Key
-    aesKey = crypto.privateDecrypt(
-      {
-        key: formattedKey,
-        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-        oaepHash: "sha256"
-      },
-      Buffer.from(encrypted_aes_key, "base64")
-    );
+    const aesKey = crypto.privateDecrypt({
+      key: formattedKey,
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+      oaepHash: "sha256"
+    }, Buffer.from(encrypted_aes_key, "base64"));
 
-    // 2. Decrypt Payload
     const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
-    const authTag = flowBuffer.slice(-16);
-    const encryptedData = flowBuffer.slice(0, -16);
+    const requestIv = Buffer.from(initial_vector, "base64");
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
-    decipher.setAuthTag(authTag);
+    decipher.setAuthTag(flowBuffer.slice(-16));
     
-    const decrypted = Buffer.concat([decipher.update(encryptedData), decipher.final()]).toString("utf8");
+    const decrypted = Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8");
     const { action, data, screen } = JSON.parse(decrypted);
 
-    console.log(`Action: ${action}, Screen: ${screen}`);
+    let responsePayload = { version: "3.0", screen: screen || "LOCATION_SCREEN", data: {} };
 
-    // 3. Handle Actions
-    let responsePayload = {
-      version: "3.0",
-      screen: screen || "LOCATION_SCREEN",
-      data: {}
-    };
+    if (action === "INIT" || action === "data_exchange") {
+      let resData = { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false };
 
-    if (action === "ping") {
-      responsePayload.data = { status: "active" };
+      const countryRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
+      resData.country_list = mapList(countryRes.data?.Data);
+
+      if (data?.country_id) {
+        const stateRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
+        resData.state_list = mapList(stateRes.data?.Data);
+        resData.is_state_enabled = resData.state_list.length > 0;
+      }
+
+      if (data?.state_id) {
+        const parishadRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
+        resData.parishad_list = mapList(parishadRes.data?.Data);
+        resData.is_parishad_enabled = resData.parishad_list.length > 0;
+      }
+      responsePayload.data = resData;
     } 
     
-    else if (action === "INIT" || action === "data_exchange") {
-      let responseData = {
-        country_list: [],
-        state_list: [],
-        parishad_list: [],
-        is_state_enabled: false,
-        is_parishad_enabled: false
-      };
-
-      // Country Fetch
-      try {
-        const countryRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS, timeout: 5000 });
-        responseData.country_list = mapList(countryRes.data?.Data);
-      } catch (e) { console.error("Country Error:", e.message); }
-
-      // State Fetch
-      if (data?.country_id) {
-        try {
-          const stateRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
-          responseData.state_list = mapList(stateRes.data?.Data);
-          responseData.is_state_enabled = responseData.state_list.length > 0;
-        } catch (e) { console.error("State Error:", e.message); }
-      }
-
-      // Parishad Fetch
-      if (data?.state_id) {
-        try {
-          const parishadRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
-          responseData.parishad_list = mapList(parishadRes.data?.Data);
-          responseData.is_parishad_enabled = responseData.parishad_list.length > 0;
-        } catch (e) { console.error("Parishad Error:", e.message); }
-      }
-
-      responsePayload.data = responseData;
-    }
-
     else if (action === "complete") {
-      // Fire-and-forget WhatsApp Message
-      const parishadId = data?.parishad_id;
-      if (parishadId) {
-        axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${parishadId}`, { headers: ABTYP_HEADERS })
-          .then(res => {
-            const groupLink = res.data?.Data?.WhatsAppGroupLink;
-            if (groupLink) {
+      const pId = data?.parishad_id;
+      if (pId) {
+        axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${pId}`, { headers: ABTYP_HEADERS })
+          .then(linkRes => {
+            const link = linkRes.data?.Data?.WhatsAppGroupLink;
+            if (link) {
               return axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
                 messaging_product: "whatsapp",
                 to: FIXED_RECIPIENT,
                 type: "text",
-                text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad Link:\n${groupLink}` }
+                text: { body: `Welcome to ABTYP 🙏\n\nYour Link: ${link}` }
               }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
             }
-          }).catch(e => console.error("Async Error:", e.message));
+          }).catch(e => console.error("WA Send Error:", e.response?.data || e.message));
       }
-
       responsePayload.data = { acknowledged: true };
     }
 
-    // 4. Send Encrypted Response
-    const finalBase64 = encryptResponse(responsePayload, aesKey, requestIv);
-    return res.status(200).send(finalBase64);
+    return res.status(200).send(encryptResponse(responsePayload, aesKey, requestIv));
 
   } catch (err) {
-    console.error("Critical Decryption/Server Error:", err.message);
-    // If decryption fails, the error is likely the Private Key mismatch.
-    // Return 400 or a specific error so it's visible in Flow logs.
+    console.error("Server Error:", err.message);
     return res.status(400).send("Decryption Failed");
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server on port ${PORT}`));
+app.listen(process.env.PORT || 3000);
