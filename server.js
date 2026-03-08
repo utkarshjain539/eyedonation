@@ -47,33 +47,25 @@ app.post("/", async (req, res) => {
 
   try {
     const aesKey = crypto.privateDecrypt({
-      key: formattedKey, 
-      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, 
-      oaepHash: "sha256"
+      key: formattedKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256"
     }, Buffer.from(encrypted_aes_key, "base64"));
 
     const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
     const requestIv = Buffer.from(initial_vector, "base64");
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
     decipher.setAuthTag(flowBuffer.slice(-16));
-    
     const decrypted = Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8");
     const { action, data } = JSON.parse(decrypted);
 
-    console.log(`\n[TRACE] Action: ${action} | Data: ${JSON.stringify(data)}`);
+    console.log(`\n[LOG] Received Action: ${action}`);
 
-    // 1. Handle Meta Ping
     if (action === "ping") {
       return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, requestIv));
     }
 
-    // 2. Handle Dropdowns (INIT & data_exchange)
     if (action === "INIT" || action === "data_exchange") {
-      let resp = { 
-        version: "3.0", 
-        screen: "LOCATION_SCREEN", 
-        data: { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false } 
-      };
+      console.log("[LOG] Handling Data Exchange...");
+      let resp = { version: "3.0", screen: "LOCATION_SCREEN", data: { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false } };
       
       const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
       resp.data.country_list = mapList(cRes.data?.Data);
@@ -83,75 +75,45 @@ app.post("/", async (req, res) => {
         resp.data.state_list = mapList(sRes.data?.Data);
         resp.data.is_state_enabled = resp.data.state_list.length > 0;
       }
-      
       if (data?.state_id) {
         const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
         resp.data.parishad_list = mapList(pRes.data?.Data);
         resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
       }
-
       return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
     }
 
-    // 3. Handle Final "complete" Action
-    // 3. Handle Final "complete" Action (When user clicks the button)
+    // THIS IS THE BLOCK THAT MUST RUN
     if (action === "complete") {
-      // Note: We use the key 'parishad_id' because that's what is in your latest logs
-      const pId = data?.parishad_id || data?.selected_parishad_id;
-      
-      console.log(`\n[SUBMIT] Processing final submission for Parishad: ${pId}`);
+      const pId = data?.parishad_id;
+      console.log(`[SUCCESS] COMPLETE ACTION TRIGGERED! Parishad ID: ${pId}`);
 
       if (pId) {
         try {
-          // STEP 1: Get the link from ABTYP API
-          console.log(`[API] Fetching link for Parishad ID: ${pId}...`);
-          const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${pId}`, { 
-            headers: ABTYP_HEADERS 
-          });
-          
+          const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${pId}`, { headers: ABTYP_HEADERS });
           const groupLink = linkRes.data?.Data?.WhatsAppGroupLink;
 
           if (groupLink) {
-            console.log(`[API] Link found: ${groupLink}`);
-
-            // STEP 2: Send the WhatsApp Message via Meta
-            console.log(`[META] Sending message to ${FIXED_RECIPIENT}...`);
-            const metaRes = await axios.post(
-              `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
-              {
-                messaging_product: "whatsapp",
-                to: FIXED_RECIPIENT,
-                type: "text",
-                text: { 
-                  body: `Welcome to ABTYP 🙏\n\nHere is your Parishad WhatsApp Group Link:\n${groupLink}` 
-                }
-              },
-              { 
-                headers: { 
-                  Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-                  "Content-Type": "application/json"
-                } 
-              }
-            );
-
-            console.log(`[SUCCESS] Message sent! Meta ID: ${metaRes.data?.messages?.[0]?.id}`);
+            console.log(`[API] Group Link Found: ${groupLink}. Sending WhatsApp...`);
+            await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
+              messaging_product: "whatsapp",
+              to: FIXED_RECIPIENT,
+              type: "text",
+              text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad Link: ${groupLink}` }
+            }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
+            console.log("[FINAL] WhatsApp message sent successfully!");
           } else {
-            console.warn(`[WARN] No link found in ABTYP database for ID: ${pId}`);
+            console.log("[WARN] No link found for this Parishad.");
           }
         } catch (err) {
-          console.error(`[ERROR] Failed to process link or send message:`);
-          console.error(err.response?.data || err.message);
+          console.error("[ERROR] Meta/ABTYP API Error:", err.response?.data || err.message);
         }
-      } else {
-        console.error("[ERROR] Complete action received but Parishad ID was missing!");
       }
-
-      // Always respond to the Flow so the user sees a "Success" checkmark
       return res.status(200).send(encryptResponse({ data: { acknowledged: true } }, aesKey, requestIv));
     }
 
   } catch (err) {
-    console.error(`[FATAL] Error: ${err.message}`);
+    console.error("[FATAL] Server Error:", err.message);
     return res.status(400).send("Error");
   }
 });
