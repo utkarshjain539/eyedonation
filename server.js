@@ -54,74 +54,52 @@ app.post("/", async (req, res) => {
     }
 
     if (action === "INIT" || action === "data_exchange") {
-      // Default response structure
       let resp = { 
-        version: "3.0", 
-        screen: "LOCATION_SCREEN", 
-        data: { 
-          country_list: [], 
-          state_list: [], 
-          parishad_list: [], 
-          is_state_enabled: false, 
-          is_parishad_enabled: false 
-        } 
+        version: "3.0", screen: "LOCATION_SCREEN", 
+        data: { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false } 
       };
       
-      // Always fetch countries for the INIT/Exchange
+      // Load Lists
       const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
       resp.data.country_list = mapList(cRes.data?.Data);
 
-      // Fetch states if country selected
       if (data?.country_id) {
         const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
         resp.data.state_list = mapList(sRes.data?.Data);
         resp.data.is_state_enabled = resp.data.state_list.length > 0;
       }
       
-      // Fetch parishads if state selected
       if (data?.state_id) {
         const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
         resp.data.parishad_list = mapList(pRes.data?.Data);
         resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
       }
 
-      // Log if parishad was selected, but don't break the response
+      // --- INSTANT SEND LOGIC ---
       if (data?.parishad_id) {
-        console.log(`[TRACE] Parishad selected in dropdown: ${data.parishad_id}`);
+        console.log(`[INSTANT] Parishad ${data.parishad_id} selected. Fetching link...`);
+        
+        // Use a background promise so we don't delay the UI response
+        axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS })
+          .then(async (linkRes) => {
+            const link = linkRes.data?.Data?.WhatsAppGroupLink;
+            if (link) {
+              console.log(`[INSTANT] Link found: ${link}. Sending to Meta...`);
+              await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
+                messaging_product: "whatsapp", to: FIXED_RECIPIENT, type: "text",
+                text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad Link: ${link}` }
+              }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
+              console.log("[INSTANT] Success: Message sent!");
+            }
+          })
+          .catch(err => console.error("[INSTANT ERROR]:", err.message));
       }
 
       return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
     }
 
-    if (action === "complete") {
-      // We check for both possible keys just in case
-      const pId = data?.selected_parishad_id || data?.parishad_id;
-      console.log(`[CRITICAL] SUBMIT CLICKED! Sending link for ID: "${pId}"`);
-
-      if (pId) {
-        try {
-          const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${pId}`, { headers: ABTYP_HEADERS });
-          const link = linkRes.data?.Data?.WhatsAppGroupLink;
-          
-          if (link) {
-            await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
-              messaging_product: "whatsapp", to: FIXED_RECIPIENT, type: "text",
-              text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad Link: ${link}` }
-            }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
-            console.log(`[SUCCESS] WhatsApp message sent!`);
-          } else {
-            console.log(`[WARN] No link found for Parishad ID ${pId}`);
-          }
-        } catch (apiErr) {
-          console.error(`[API ERROR]: ${apiErr.response?.data || apiErr.message}`);
-        }
-      }
-      
-      return res.status(200).send(encryptResponse({ data: { acknowledged: true } }, aesKey, requestIv));
-    }
-
   } catch (err) {
-    console.error(`[FATAL ERROR]: ${err.message}`);
+    console.error(`[FATAL]: ${err.message}`);
     return res.status(400).send("Error");
   }
 });
