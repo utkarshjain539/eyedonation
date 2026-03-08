@@ -94,35 +94,59 @@ app.post("/", async (req, res) => {
     }
 
     // 3. Handle Final "complete" Action
+    // 3. Handle Final "complete" Action (When user clicks the button)
     if (action === "complete") {
-      const pId = data?.selected_parishad_id;
-      console.log(`[CRITICAL] SUBMIT RECEIVED! Parishad ID: "${pId}"`);
+      // Note: We use the key 'parishad_id' because that's what is in your latest logs
+      const pId = data?.parishad_id || data?.selected_parishad_id;
+      
+      console.log(`\n[SUBMIT] Processing final submission for Parishad: ${pId}`);
 
       if (pId) {
         try {
-          // Fetch the group link
-          const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${pId}`, { headers: ABTYP_HEADERS });
+          // STEP 1: Get the link from ABTYP API
+          console.log(`[API] Fetching link for Parishad ID: ${pId}...`);
+          const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${pId}`, { 
+            headers: ABTYP_HEADERS 
+          });
+          
           const groupLink = linkRes.data?.Data?.WhatsAppGroupLink;
-          console.log(`[API] Link for ID ${pId}: ${groupLink || "NOT FOUND"}`);
 
           if (groupLink) {
-            // Send the WhatsApp Message
-            await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
-              messaging_product: "whatsapp", 
-              to: FIXED_RECIPIENT, 
-              type: "text",
-              text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad Link: ${groupLink}` }
-            }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
-            
-            console.log(`[SUCCESS] Message sent to ${FIXED_RECIPIENT}`);
+            console.log(`[API] Link found: ${groupLink}`);
+
+            // STEP 2: Send the WhatsApp Message via Meta
+            console.log(`[META] Sending message to ${FIXED_RECIPIENT}...`);
+            const metaRes = await axios.post(
+              `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
+              {
+                messaging_product: "whatsapp",
+                to: FIXED_RECIPIENT,
+                type: "text",
+                text: { 
+                  body: `Welcome to ABTYP 🙏\n\nHere is your Parishad WhatsApp Group Link:\n${groupLink}` 
+                }
+              },
+              { 
+                headers: { 
+                  Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+                  "Content-Type": "application/json"
+                } 
+              }
+            );
+
+            console.log(`[SUCCESS] Message sent! Meta ID: ${metaRes.data?.messages?.[0]?.id}`);
+          } else {
+            console.warn(`[WARN] No link found in ABTYP database for ID: ${pId}`);
           }
-        } catch (apiErr) {
-          console.error(`[ERROR] Processing failed: ${apiErr.message}`);
+        } catch (err) {
+          console.error(`[ERROR] Failed to process link or send message:`);
+          console.error(err.response?.data || err.message);
         }
       } else {
-        console.error("[ERROR] Action 'complete' reached but no parishad ID was in the payload.");
+        console.error("[ERROR] Complete action received but Parishad ID was missing!");
       }
 
+      // Always respond to the Flow so the user sees a "Success" checkmark
       return res.status(200).send(encryptResponse({ data: { acknowledged: true } }, aesKey, requestIv));
     }
 
