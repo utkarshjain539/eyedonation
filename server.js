@@ -72,9 +72,18 @@ app.post("/", async (req, res) => {
       }
 
       // If a Parishad was just selected, we log it but just return the current state
-      if (data?.parishad_id) {
-        console.log(`[TRACE] User selected Parishad ID in dropdown: ${data.parishad_id}`);
-      }
+     // Inside the action === "INIT" || action === "data_exchange" block:
+
+if (data?.parishad_id) {
+    console.log(`[TRACE] User selected Parishad ID in dropdown: ${data.parishad_id}`);
+    
+    // We must return the current state so the Flow knows the ID is "locked in"
+    resp.data.country_list = responsePayload.data.country_list; 
+    resp.data.state_list = responsePayload.data.state_list;
+    resp.data.parishad_list = responsePayload.data.parishad_list;
+    resp.data.is_state_enabled = true;
+    resp.data.is_parishad_enabled = true;
+}
 
       return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
     }
