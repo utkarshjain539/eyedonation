@@ -74,24 +74,44 @@ app.post("/", async (req, res) => {
     };
 
     if (action === "INIT" || action === "data_exchange") {
-      // 1. Fetch Countries (Always needed for the first screen)
-      const countryRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
-      responsePayload.data.country_list = mapList(countryRes.data?.Data);
+      // 1. Fetch Countries - This MUST succeed for the first screen to load
+      try {
+        const countryRes = await axios.get("https://api.abtyp.org/v0/country", { 
+          headers: ABTYP_HEADERS,
+          timeout: 5000 // Add a timeout
+        });
+        
+        const countries = mapList(countryRes.data?.Data);
+        
+        // If API is empty, provide a fallback so the Flow doesn't crash
+        responsePayload.data.country_list = countries.length > 0 
+          ? countries 
+          : [{ id: "100", title: "India" }]; 
 
-      // 2. Fetch States if Country is selected
+      } catch (e) {
+        console.error("Country Fetch Failed:", e.message);
+        // CRITICAL: Provide a fallback item so the Flow can at least open
+        responsePayload.data.country_list = [{ id: "100", title: "India" }];
+      }
+
+      // 2. Handle State Selection
       if (data?.country_id) {
-        const stateRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
-        responsePayload.data.state_list = mapList(stateRes.data?.Data);
-        responsePayload.data.is_state_enabled = responsePayload.data.state_list.length > 0;
+        try {
+          const stateRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
+          responsePayload.data.state_list = mapList(stateRes.data?.Data);
+          responsePayload.data.is_state_enabled = responsePayload.data.state_list.length > 0;
+        } catch (e) { console.error("State Fetch Failed"); }
       }
 
-      // 3. Fetch Parishads if State is selected
+      // 3. Handle Parishad Selection
       if (data?.state_id) {
-        const parishadRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
-        responsePayload.data.parishad_list = mapList(parishadRes.data?.Data);
-        responsePayload.data.is_parishad_enabled = responsePayload.data.parishad_list.length > 0;
+        try {
+          const parishadRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
+          responsePayload.data.parishad_list = mapList(parishadRes.data?.Data);
+          responsePayload.data.is_parishad_enabled = responsePayload.data.parishad_list.length > 0;
+        } catch (e) { console.error("Parishad Fetch Failed"); }
       }
-    } 
+    }
     
     else if (action === "complete") {
       const pId = data?.parishad_id;
