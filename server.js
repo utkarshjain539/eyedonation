@@ -6,14 +6,13 @@ const app = express();
 app.use(express.json());
 
 /* ---------------- CONFIG ---------------- */
-
 const ABTYP_HEADERS = {
   "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%",
   "Content-Type": "application/json"
 };
 
 const PHONE_NUMBER_ID = "1049088024951885";
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN; // Use System User Permanent Token
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN; 
 const FIXED_RECIPIENT = "918488861504";
 
 const privateKeyInput = process.env.PRIVATE_KEY || "";
@@ -28,7 +27,6 @@ if (privateKeyInput.includes("BEGIN PRIVATE KEY")) {
 }
 
 /* ---------------- HELPERS ---------------- */
-
 const mapList = (arr) => (arr || []).map(item => ({
   id: item.Id?.toString() || "",
   title: item.Name || ""
@@ -37,17 +35,14 @@ const mapList = (arr) => (arr || []).map(item => ({
 const encryptResponse = (data, aesKey, iv) => {
   const invertedIv = Buffer.alloc(iv.length);
   for (let i = 0; i < iv.length; i++) invertedIv[i] = ~iv[i];
-
   const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, invertedIv);
   const encrypted = Buffer.concat([cipher.update(JSON.stringify(data), "utf8"), cipher.final()]);
   return Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64");
 };
 
 /* ---------------- ENDPOINT ---------------- */
-
 app.post("/", async (req, res) => {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = req.body;
-
   if (!encrypted_aes_key) return res.status(200).send("OK");
 
   try {
@@ -65,26 +60,37 @@ app.post("/", async (req, res) => {
     const decrypted = Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8");
     const { action, data, screen } = JSON.parse(decrypted);
 
-    let responsePayload = { version: "3.0", screen: screen || "LOCATION_SCREEN", data: {} };
+    // Default structure to avoid "Decrypted response not as expected"
+    let responsePayload = { 
+      version: "3.0", 
+      screen: screen || "LOCATION_SCREEN", 
+      data: {
+        country_list: [],
+        state_list: [],
+        parishad_list: [],
+        is_state_enabled: false,
+        is_parishad_enabled: false
+      } 
+    };
 
     if (action === "INIT" || action === "data_exchange") {
-      let resData = { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false };
-
+      // 1. Fetch Countries (Always needed for the first screen)
       const countryRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
-      resData.country_list = mapList(countryRes.data?.Data);
+      responsePayload.data.country_list = mapList(countryRes.data?.Data);
 
+      // 2. Fetch States if Country is selected
       if (data?.country_id) {
         const stateRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
-        resData.state_list = mapList(stateRes.data?.Data);
-        resData.is_state_enabled = resData.state_list.length > 0;
+        responsePayload.data.state_list = mapList(stateRes.data?.Data);
+        responsePayload.data.is_state_enabled = responsePayload.data.state_list.length > 0;
       }
 
+      // 3. Fetch Parishads if State is selected
       if (data?.state_id) {
         const parishadRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
-        resData.parishad_list = mapList(parishadRes.data?.Data);
-        resData.is_parishad_enabled = resData.parishad_list.length > 0;
+        responsePayload.data.parishad_list = mapList(parishadRes.data?.Data);
+        responsePayload.data.is_parishad_enabled = responsePayload.data.parishad_list.length > 0;
       }
-      responsePayload.data = resData;
     } 
     
     else if (action === "complete") {
@@ -98,7 +104,7 @@ app.post("/", async (req, res) => {
                 messaging_product: "whatsapp",
                 to: FIXED_RECIPIENT,
                 type: "text",
-                text: { body: `Welcome to ABTYP 🙏\n\nYour Link: ${link}` }
+                text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad WhatsApp Group Link: ${link}` }
               }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
             }
           }).catch(e => console.error("WA Send Error:", e.response?.data || e.message));
