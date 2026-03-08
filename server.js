@@ -47,26 +47,19 @@ app.post("/", async (req, res) => {
     decipher.setAuthTag(flowBuffer.slice(-16));
     const decrypted = Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8");
     
-    // IMPORTANT: Capture flow_context for the sender's phone number
     const payload = JSON.parse(decrypted);
     const { action, data } = payload;
-    
-    // Determine the recipient (using sender's number from request)
-    // Note: In WhatsApp Flows, the sender's ID is often in the top level or metadata
-    const senderNumber = payload.flow_context?.sender_id || "918488861504"; // Fallback to your number
 
-    console.log(`\n[TRACE] Action: ${action} | User: ${senderNumber}`);
-
-    if (action === "ping") {
-      return res.status(200).send(encryptResponse({ data: { status: "active" } }, aesKey, requestIv));
-    }
+    // FINDING THE SENDER: Check multiple places where Meta hides the phone number
+    const senderNumber = payload.flow_context?.sender_id || payload.user_id || "918488861504";
 
     if (action === "INIT" || action === "data_exchange") {
       let resp = { 
         version: "3.0", screen: "LOCATION_SCREEN", 
-        data: { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false, is_submit_visible: false } 
+        data: { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false, status_text: "", is_submit_enabled: false } 
       };
       
+      // Fetching logic (simplified for brevity)
       const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
       resp.data.country_list = mapList(cRes.data?.Data);
 
@@ -82,35 +75,31 @@ app.post("/", async (req, res) => {
         resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
       }
 
-      // If Parishad is selected, enable the Submit button
+      // --- THE DELAYED TRIGGER ---
       if (data?.parishad_id) {
-        resp.data.is_submit_visible = true;
+        console.log(`[DELAY] Parishad ${data.parishad_id} selected. Starting 5s timer...`);
+        resp.data.status_text = "✅ Link sent! Check your WhatsApp notifications.";
+        resp.data.is_submit_enabled = true;
+
+        setTimeout(async () => {
+          try {
+            const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
+            const link = linkRes.data?.Data?.WhatsAppGroupLink;
+            if (link) {
+              await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
+                messaging_product: "whatsapp", to: senderNumber, type: "text",
+                text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad Link: ${link}` }
+              }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
+              console.log(`[DELAYED SUCCESS] Sent link to ${senderNumber}`);
+            }
+          } catch (e) { console.error("[DELAYED ERROR]", e.message); }
+        }, 3000); // 3-second delay feels more "natural" than 5
       }
 
       return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
     }
 
     if (action === "complete") {
-      const pId = data?.selected_parishad_id;
-      console.log(`[SUBMIT] Closing Flow and sending link to ${senderNumber} for Parishad: ${pId}`);
-
-      if (pId) {
-        try {
-          const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${pId}`, { headers: ABTYP_HEADERS });
-          const link = linkRes.data?.Data?.WhatsAppGroupLink;
-          
-          if (link) {
-            await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
-              messaging_product: "whatsapp", 
-              to: senderNumber, // DYNAMIC RECIPIENT
-              type: "text",
-              text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad Link: ${link}` }
-            }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
-            console.log(`[SUCCESS] Sent link to ${senderNumber}`);
-          }
-        } catch (e) { console.error("[ERROR]", e.message); }
-      }
-
       return res.status(200).send(encryptResponse({ data: { acknowledged: true } }, aesKey, requestIv));
     }
 
