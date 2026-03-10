@@ -51,7 +51,7 @@ app.post("/", async (req, res) => {
     const { action, data } = payload;
 
     // FINDING THE SENDER: Check multiple places where Meta hides the phone number
-    const senderNumber = payload.flow_context?.sender_id || payload.user_id || "918980037000";
+    const senderNumber = payload.flow_context?.sender_id || payload.user_id || "918488861504";
 
     if (action === "INIT" || action === "data_exchange") {
       let resp = { 
