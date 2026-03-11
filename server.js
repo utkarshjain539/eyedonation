@@ -227,10 +227,10 @@ app.post("/", async (req, res) => {
 
   } catch (err) {
 
-    console.error("FLOW ERROR:", err.message);
+     console.error("FLOW ERROR:", err.message);
 
-    return res.status(400).json({
-      error: "Flow processing failed"
+    return res.status(200).json({
+      error: "flow_error"
     });
   }
 });
