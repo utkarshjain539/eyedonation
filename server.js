@@ -1,3 +1,4 @@
+```javascript
 const express = require("express");
 const crypto = require("crypto");
 const axios = require("axios");
@@ -61,29 +62,24 @@ app.get("/", (req, res) => {
 app.post("/", async (req, res) => {
 
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = req.body;
+
   console.log("Encrypted AES Key:", encrypted_aes_key ? "Received" : "Missing");
 
-  console.log("---- FLOW REQUEST ----");
-
-    console.log("Encrypted AES Key Received:",
-      encrypted_aes_key ? "YES" : "NO");
-
-    console.log("Encrypted AES Key Length:",
-      encrypted_aes_key ? encrypted_aes_key.length : 0);
-
-    console.log("PRIVATE KEY Loaded:",
-      formattedKey ? "YES" : "NO");
   /* HEALTH CHECK */
   if (!encrypted_aes_key) {
     return res.status(200).json({ status: "active" });
   }
-console.log("Attempting RSA Decryption...");
- 
+
+  let aesKey;
+  let requestIv;
+
   try {
+
+    console.log("Attempting RSA Decryption...");
 
     /* DECRYPT AES KEY */
 
-    const aesKey = crypto.privateDecrypt(
+    aesKey = crypto.privateDecrypt(
       {
         key: formattedKey,
         padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
@@ -97,7 +93,7 @@ console.log("Attempting RSA Decryption...");
     /* DECRYPT FLOW PAYLOAD */
 
     const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
-    const requestIv = Buffer.from(initial_vector, "base64");
+    requestIv = Buffer.from(initial_vector, "base64");
 
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
     decipher.setAuthTag(flowBuffer.slice(-16));
@@ -108,6 +104,8 @@ console.log("Attempting RSA Decryption...");
     ]).toString("utf8");
 
     const payload = JSON.parse(decrypted);
+
+    console.log("FLOW ACTION:", payload.action);
 
     const { action, data } = payload;
 
@@ -173,9 +171,7 @@ console.log("Attempting RSA Decryption...");
 
       if (data?.parishad_id) {
 
-        resp.data.status_text =
-          "✅ Link sent! Check your WhatsApp.";
-
+        resp.data.status_text = "✅ Link sent! Check your WhatsApp.";
         resp.data.is_submit_enabled = true;
 
         setTimeout(async () => {
@@ -210,23 +206,20 @@ console.log("Attempting RSA Decryption...");
               );
 
               console.log("Link sent to:", senderNumber);
+
             }
 
           } catch (err) {
-
             console.log("WhatsApp send error:", err.message);
-
           }
 
         }, 2000);
       }
 
-      return res
-        .status(200)
-        .send(encryptResponse(resp, aesKey, requestIv));
+      return res.status(200).send(
+        encryptResponse(resp, aesKey, requestIv)
+      );
     }
-
-    /* COMPLETE */
 
     if (action === "complete") {
 
@@ -243,13 +236,21 @@ console.log("Attempting RSA Decryption...");
 
     console.error("FLOW ERROR:", err.message);
 
-  console.error("PRIVATE KEY START:");
-  console.error(formattedKey.substring(0, 50));
+    /* IMPORTANT: RETURN ENCRYPTED ERROR RESPONSE */
 
-  return res.status(200).json({
-    error: "flow_error"
-    });
+    if (aesKey && requestIv) {
+      return res.status(200).send(
+        encryptResponse(
+          { error: "flow_error" },
+          aesKey,
+          requestIv
+        )
+      );
+    }
+
+    return res.status(200).json({ error: "flow_error" });
   }
+
 });
 
 /* ---------------- START SERVER ---------------- */
@@ -259,3 +260,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("ABTYP Flow Server running on port", PORT);
 });
+```
