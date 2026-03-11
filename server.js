@@ -67,7 +67,7 @@ app.get("/", (req, res) => {
 
 /* ---------------- FLOW ENDPOINT ---------------- */
 
-app.post("/w0/whatsapp-chat-boat", async (req, res) => {
+app.post("/", async (req, res) => {
 
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = req.body;
 
