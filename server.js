@@ -30,7 +30,10 @@ const encryptResponse = (data, aesKey, iv) => {
   const encrypted = Buffer.concat([cipher.update(JSON.stringify(data), "utf8"), cipher.final()]);
   return Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64");
 };
-
+/* ---------------- HEALTH CHECK ---------------- */
+app.get("/", (req, res) => {
+  res.status(200).send("WhatsApp Flow Endpoint Active");
+});
 /* ---------------- ENDPOINT ---------------- */
 app.post("/", async (req, res) => {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = req.body;
