@@ -61,10 +61,8 @@ const encryptResponse = (data, aesKey, iv) => {
 
 /* ---------------- HEALTH CHECK ---------------- */
 
-app.get("/w0/whatsapp-chat-boat", (req, res) => {
-  return res.status(200).json({
-    status: "Flow endpoint active"
-  });
+app.get("/", (req, res) => {
+  res.send("ABTYP WhatsApp Flow Server Running");
 });
 
 /* ---------------- FLOW ENDPOINT ---------------- */
