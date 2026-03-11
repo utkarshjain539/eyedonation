@@ -15,7 +15,7 @@ const ABTYP_HEADERS = {
   "Content-Type": "application/json"
 };
 
-const PHONE_NUMBER_ID = "908875015643505";
+const PHONE_NUMBER_ID = "1049088024951885";
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 
 /* ---------------- PRIVATE KEY ---------------- */
