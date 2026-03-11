@@ -3,7 +3,8 @@ const crypto = require("crypto");
 const axios = require("axios");
 
 const app = express();
-app.use(express.json({ type: "*/*" }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 axios.defaults.timeout = 2000;
 
@@ -17,24 +18,14 @@ const ABTYP_HEADERS = {
 const PHONE_NUMBER_ID = "908875015643505";
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 
-/* ---------------- PRIVATE KEY FORMAT ---------------- */
+/* ---------------- PRIVATE KEY ---------------- */
 
-const privateKeyInput = process.env.PRIVATE_KEY || "";
-
-let formattedKey;
-
-if (privateKeyInput.includes("BEGIN PRIVATE KEY")) {
-  formattedKey = privateKeyInput.replace(/\\n/g, "\n").trim();
-} else {
-  const cleanKey = privateKeyInput.replace(/\s+/g, '').trim();
-  const keyLines = cleanKey.match(/.{1,64}/g) || [];
-  formattedKey = `-----BEGIN PRIVATE KEY-----\n${keyLines.join('\n')}\n-----END PRIVATE KEY-----`;
-}
+const formattedKey = process.env.PRIVATE_KEY.replace(/\\n/g, "\n");
 
 /* ---------------- HELPERS ---------------- */
 
 const mapList = (arr) =>
-  (arr || []).map(item => ({
+  (arr || []).map((item) => ({
     id: item.Id?.toString() || "",
     title: item.Name || ""
   }));
@@ -59,7 +50,7 @@ const encryptResponse = (data, aesKey, iv) => {
   ]).toString("base64");
 };
 
-/* ---------------- HEALTH CHECK ---------------- */
+/* ---------------- SERVER TEST ---------------- */
 
 app.get("/", (req, res) => {
   res.send("ABTYP WhatsApp Flow Server Running");
@@ -70,17 +61,15 @@ app.get("/", (req, res) => {
 app.post("/", async (req, res) => {
 
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = req.body;
-
-  /* Meta Health Check Request */
+  console.log("Encrypted AES Key:", encrypted_aes_key ? "Received" : "Missing");
+  /* HEALTH CHECK */
   if (!encrypted_aes_key) {
-    return res.status(200).json({
-      status: "active"
-    });
+    return res.status(200).json({ status: "active" });
   }
 
   try {
 
-    /* ---------------- DECRYPT AES KEY ---------------- */
+    /* DECRYPT AES KEY */
 
     const aesKey = crypto.privateDecrypt(
       {
@@ -91,13 +80,12 @@ app.post("/", async (req, res) => {
       Buffer.from(encrypted_aes_key, "base64")
     );
 
-    /* ---------------- DECRYPT FLOW PAYLOAD ---------------- */
+    /* DECRYPT FLOW PAYLOAD */
 
     const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
     const requestIv = Buffer.from(initial_vector, "base64");
 
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
-
     decipher.setAuthTag(flowBuffer.slice(-16));
 
     const decrypted = Buffer.concat([
@@ -119,7 +107,7 @@ app.post("/", async (req, res) => {
     if (action === "INIT" || action === "data_exchange") {
 
       let resp = {
-        version: "3.0",
+        version: "7.1",
         screen: "LOCATION_SCREEN",
         data: {
           country_list: [],
@@ -132,46 +120,42 @@ app.post("/", async (req, res) => {
         }
       };
 
-      /* -------- COUNTRY -------- */
+      /* COUNTRY */
 
-      const countryRes = await axios.get(
+      const cRes = await axios.get(
         "https://api.abtyp.org/v0/country",
         { headers: ABTYP_HEADERS }
       );
 
-      resp.data.country_list = mapList(countryRes.data?.Data);
+      resp.data.country_list = mapList(cRes.data?.Data);
 
-      /* -------- STATE -------- */
+      /* STATE */
 
       if (data?.country_id) {
 
-        const stateRes = await axios.get(
+        const sRes = await axios.get(
           `https://api.abtyp.org/v0/state?CountryId=${data.country_id}`,
           { headers: ABTYP_HEADERS }
         );
 
-        resp.data.state_list = mapList(stateRes.data?.Data);
-
-        resp.data.is_state_enabled =
-          resp.data.state_list.length > 0;
+        resp.data.state_list = mapList(sRes.data?.Data);
+        resp.data.is_state_enabled = resp.data.state_list.length > 0;
       }
 
-      /* -------- PARISHAD -------- */
+      /* PARISHAD */
 
       if (data?.state_id) {
 
-        const parishadRes = await axios.get(
+        const pRes = await axios.get(
           `https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`,
           { headers: ABTYP_HEADERS }
         );
 
-        resp.data.parishad_list = mapList(parishadRes.data?.Data);
-
-        resp.data.is_parishad_enabled =
-          resp.data.parishad_list.length > 0;
+        resp.data.parishad_list = mapList(pRes.data?.Data);
+        resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
       }
 
-      /* -------- SEND WHATSAPP LINK -------- */
+      /* SEND GROUP LINK */
 
       if (data?.parishad_id) {
 
@@ -189,8 +173,7 @@ app.post("/", async (req, res) => {
               { headers: ABTYP_HEADERS }
             );
 
-            const link =
-              linkRes.data?.Data?.WhatsAppGroupLink;
+            const link = linkRes.data?.Data?.WhatsAppGroupLink;
 
             if (link) {
 
@@ -212,22 +195,16 @@ app.post("/", async (req, res) => {
                 }
               );
 
-              console.log(
-                `[SUCCESS] Link sent to ${senderNumber}`
-              );
-
+              console.log("Link sent to:", senderNumber);
             }
 
-          } catch (e) {
+          } catch (err) {
 
-            console.error(
-              "[WHATSAPP ERROR]",
-              e.message
-            );
+            console.log("WhatsApp send error:", err.message);
 
           }
 
-        }, 3000);
+        }, 2000);
       }
 
       return res
@@ -235,7 +212,7 @@ app.post("/", async (req, res) => {
         .send(encryptResponse(resp, aesKey, requestIv));
     }
 
-    /* ---------------- COMPLETE ---------------- */
+    /* COMPLETE */
 
     if (action === "complete") {
 
@@ -250,19 +227,18 @@ app.post("/", async (req, res) => {
 
   } catch (err) {
 
-    console.error("[FLOW ERROR]", err.message);
+    console.error("FLOW ERROR:", err.message);
 
     return res.status(400).json({
       error: "Flow processing failed"
     });
-
   }
 });
 
-/* ---------------- SERVER ---------------- */
+/* ---------------- START SERVER ---------------- */
 
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`Flow server running on port ${PORT}`);
+  console.log("ABTYP Flow Server running on port", PORT);
 });
