@@ -105,7 +105,13 @@ app.post("/", async (req, res) => {
     /* STEP 3: LOGIC HANDLING */
     const { action, data } = decryptedPayload;
     const senderNumber = decryptedPayload.flow_context?.sender_id || "919327447138";
-
+// --- ADD THIS BLOCK HERE ---
+    if (action === "ping") {
+      console.log("Step 3: Handling PING. Returning Pong...");
+      return res.status(200).send(
+        encryptResponse({ data: { status: "active" } }, aesKey, requestIv)
+      );
+    }
     if (action === "INIT" || action === "data_exchange") {
       console.log(`Step 3: Handling ${action}. CountryID: ${data?.country_id}, StateID: ${data?.state_id}`);
       
