@@ -1,4 +1,3 @@
-```javascript
 const express = require("express");
 const crypto = require("crypto");
 const axios = require("axios");
@@ -260,4 +259,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("ABTYP Flow Server running on port", PORT);
 });
-```
