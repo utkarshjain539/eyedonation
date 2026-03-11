@@ -7,7 +7,7 @@ app.use(express.json());
 
 /* ---------------- CONFIG ---------------- */
 const ABTYP_HEADERS = { "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%", "Content-Type": "application/json" };
-const PHONE_NUMBER_ID = "1049088024951885";
+const PHONE_NUMBER_ID = "908875015643505";
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN; 
 
 const privateKeyInput = process.env.PRIVATE_KEY || "";
@@ -86,7 +86,7 @@ app.post("/", async (req, res) => {
             const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${data.parishad_id}`, { headers: ABTYP_HEADERS });
             const link = linkRes.data?.Data?.WhatsAppGroupLink;
             if (link) {
-              await axios.post(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
+              await axios.post(`https://graph.facebook.com/v24.0/${PHONE_NUMBER_ID}/messages`, {
                 messaging_product: "whatsapp", to: senderNumber, type: "text",
                 text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad Link: ${link}` }
               }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
