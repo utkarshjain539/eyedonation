@@ -62,11 +62,23 @@ app.post("/", async (req, res) => {
 
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = req.body;
   console.log("Encrypted AES Key:", encrypted_aes_key ? "Received" : "Missing");
+
+  console.log("---- FLOW REQUEST ----");
+
+    console.log("Encrypted AES Key Received:",
+      encrypted_aes_key ? "YES" : "NO");
+
+    console.log("Encrypted AES Key Length:",
+      encrypted_aes_key ? encrypted_aes_key.length : 0);
+
+    console.log("PRIVATE KEY Loaded:",
+      formattedKey ? "YES" : "NO");
   /* HEALTH CHECK */
   if (!encrypted_aes_key) {
     return res.status(200).json({ status: "active" });
   }
-
+console.log("Attempting RSA Decryption...");
+ 
   try {
 
     /* DECRYPT AES KEY */
@@ -79,6 +91,8 @@ app.post("/", async (req, res) => {
       },
       Buffer.from(encrypted_aes_key, "base64")
     );
+
+    console.log("RSA Decryption SUCCESS");
 
     /* DECRYPT FLOW PAYLOAD */
 
@@ -227,10 +241,13 @@ app.post("/", async (req, res) => {
 
   } catch (err) {
 
-     console.error("FLOW ERROR:", err.message);
+    console.error("FLOW ERROR:", err.message);
 
-    return res.status(200).json({
-      error: "flow_error"
+  console.error("PRIVATE KEY START:");
+  console.error(formattedKey.substring(0, 50));
+
+  return res.status(200).json({
+    error: "flow_error"
     });
   }
 });
