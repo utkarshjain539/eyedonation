@@ -141,19 +141,30 @@ app.post("/", async (req, res) => {
     }
 
     // 3. Final Submission
-    if (action === "complete") {
+ if (action === "complete") {
+      console.log("-----------------------------------------");
+      console.log("🏁 COMPLETE ACTION TRIGGERED");
+      console.log("DATA RECEIVED:", JSON.stringify(data));
+      console.log("FLOW CONTEXT:", JSON.stringify(decryptedPayload.flow_context));
+      
       const parishadId = data?.parishad_id;
-  
-  // FALLBACK: If Testing, use your own phone number to verify the message sends
-  const senderNumber = (decryptedPayload.flow_context?.sender_id === "Testing" || !decryptedPayload.flow_context?.sender_id) 
-    ? "919327447138" // <--- Put your actual phone number here for testing
-    : decryptedPayload.flow_context.sender_id;
+      
+      // Attempt to get the number from multiple sources
+      let senderNumber = decryptedPayload.flow_context?.sender_id;
+      
+      // FALLBACK: If Meta is sending "Testing" or null, we need to know
+      if (!senderNumber || senderNumber === "Testing") {
+          console.log("⚠️ Meta didn't provide a real Sender ID. Using fallback for debug.");
+          senderNumber = "919327447138"; // Replace with your number for final verification
+      }
 
-  console.log(`🏁 Flow Complete. Target Number: ${senderNumber}`);
+      if (parishadId) {
+        console.log(`🚀 Triggering background API call for Parishad: ${parishadId} to ${senderNumber}`);
+        sendWhatsAppLink(parishadId, senderNumber);
+      } else {
+        console.error("❌ CRITICAL: 'parishad_id' was missing from the final submission payload.");
+      }
 
-  if (parishadId && senderNumber) {
-    sendWhatsAppLink(parishadId, senderNumber);
-  }
       return res.status(200).send(encryptResponse({ 
         version: "7.1", 
         data: { acknowledged: true } 
