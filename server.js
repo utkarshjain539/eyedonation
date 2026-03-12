@@ -142,18 +142,18 @@ app.post("/", async (req, res) => {
 
     // 3. Final Submission
     if (action === "complete") {
-      // Parishad ID comes from the 'payload' we defined in the Footer of the JSON
       const parishadId = data?.parishad_id;
+  
+  // FALLBACK: If Testing, use your own phone number to verify the message sends
+  const senderNumber = (decryptedPayload.flow_context?.sender_id === "Testing" || !decryptedPayload.flow_context?.sender_id) 
+    ? "919327447138" // <--- Put your actual phone number here for testing
+    : decryptedPayload.flow_context.sender_id;
 
-      console.log(`🏁 Flow Complete. Processing Link for Parishad: ${parishadId}`);
+  console.log(`🏁 Flow Complete. Target Number: ${senderNumber}`);
 
-      if (parishadId && senderId) {
-        // Trigger background task to send the link
-        sendWhatsAppLink(parishadId, senderId);
-      } else {
-        console.warn("⚠️ Warning: Could not send link. Missing Parishad ID or Sender ID.");
-      }
-
+  if (parishadId && senderNumber) {
+    sendWhatsAppLink(parishadId, senderNumber);
+  }
       return res.status(200).send(encryptResponse({ 
         version: "7.1", 
         data: { acknowledged: true } 
