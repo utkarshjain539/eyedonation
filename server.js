@@ -22,6 +22,9 @@ if (!PRIVATE_KEY) {
     console.error("❌ CRITICAL ERROR: PRIVATE_KEY environment variable is missing!");
 }
 
+// Memory Cache for Countries to speed up Flow interactions
+let cachedCountries = null;
+
 /* ---------------- HELPERS ---------------- */
 const mapList = (arr) => (arr || []).map((item) => ({
     id: item.Id?.toString() || "",
@@ -45,11 +48,10 @@ app.get("/", (req, res) => {
 });
 
 app.post("/", async (req, res) => {
-  console.log("\n--- New POST Request Received ---");
-  
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = req.body;
 
   if (!encrypted_aes_key) {
+    console.log("⚠️ Meta Health Check Ping received.");
     return res.status(200).json({ status: "active" });
   }
 
@@ -70,7 +72,6 @@ app.post("/", async (req, res) => {
     /* STEP 2: AES DECRYPTION */
     const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
     requestIv = Buffer.from(initial_vector, "base64");
-
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
     decipher.setAuthTag(flowBuffer.slice(-16));
 
@@ -80,12 +81,19 @@ app.post("/", async (req, res) => {
     ]).toString("utf8");
 
     decryptedPayload = JSON.parse(decrypted);
-    console.log(`✅ Decrypted Action: ${decryptedPayload.action}`);
+
+    // --- LOGGING SENDER ID ---
+    const action = decryptedPayload.action;
+    const senderId = decryptedPayload.flow_context?.sender_id || "NOT_PROVIDED_BY_META";
+    
+    console.log(`\n-----------------------------------------`);
+    console.log(`📱 ACTION: ${action}`);
+    console.log(`👤 SENDER: ${senderId}`);
+    console.log(`-----------------------------------------`);
 
     /* STEP 3: LOGIC HANDLING */
-    const { action, data } = decryptedPayload;
-    
-    // Meta requires ping-pong to verify endpoint health
+    const { data } = decryptedPayload;
+
     if (action === "ping") {
       return res.status(200).send(
         encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv)
@@ -107,57 +115,61 @@ app.post("/", async (req, res) => {
         }
       };
 
-      // 1. Fetch Countries (Always)
-      const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
-      resp.data.country_list = mapList(cRes.data?.Data);
+      // Handle Country List (with caching)
+      if (!cachedCountries) {
+        console.log("Fetching Countries from API...");
+        const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
+        cachedCountries = mapList(cRes.data?.Data);
+      }
+      resp.data.country_list = cachedCountries;
 
-      // 2. Conditional State Fetching
+      // Handle States
       if (data?.country_id) {
+        console.log(`Fetching States for Country: ${data.country_id}`);
         const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
         resp.data.state_list = mapList(sRes.data?.Data);
         resp.data.is_state_enabled = resp.data.state_list.length > 0;
       }
 
-      // 3. Conditional Parishad Fetching
+      // Handle Parishads
       if (data?.state_id) {
+        console.log(`Fetching Parishads for State: ${data.state_id}`);
         const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
         resp.data.parishad_list = mapList(pRes.data?.Data);
         resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
       }
 
-      // 4. Final Selection Logic
+      // Enable Submit only if a parishad is picked
       if (data?.parishad_id) {
-        resp.data.status_text = "Selection Received. Click Submit to finish.";
+        resp.data.status_text = "✅ Location selected. Press Submit to receive your link.";
         resp.data.is_submit_enabled = true;
       }
 
       return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
     }
 
-   if (action === "complete") {
-    // 1. Try to get it from flow_context
-    // 2. Try to get it from a field you might have passed from the first screen
-    // 3. Fallback to a log to see what Meta actually sent
-    const senderNumber = decryptedPayload.flow_context?.sender_id || data?.phone_number;
+    if (action === "complete") {
+      console.log(`🏁 Flow Completed. Data:`, JSON.stringify(data));
+      
+      if (data?.parishad_id && senderId !== "NOT_PROVIDED_BY_META") {
+        // Trigger background message
+        sendWhatsAppLink(data.parishad_id, senderId);
+      } else {
+        console.error("❌ Submission failed: Missing Parishad ID or valid Sender ID.");
+      }
 
-    console.log(`Step 3: Flow Completed by ${senderNumber}. Data:`, data);
-
-    if (senderNumber && data?.parishad_id) {
-        sendWhatsAppLink(data.parishad_id, senderNumber);
-    }
-
-    return res.status(200).send(encryptResponse({ 
+      return res.status(200).send(encryptResponse({ 
         version: "7.1", 
         data: { acknowledged: true } 
-    }, aesKey, requestIv));
-}
+      }, aesKey, requestIv));
+    }
 
   } catch (err) {
-    console.error("🔴 ERROR:", err.message);
+    console.error("🔴 SERVER ERROR:", err.message);
     if (aesKey && requestIv) {
       return res.status(200).send(encryptResponse({ version: "7.1", error: "flow_error", details: err.message }, aesKey, requestIv));
     }
-    return res.status(500).json({ error: "internal_server_error" });
+    return res.status(500).json({ error: "decryption_failed" });
   }
 });
 
@@ -165,31 +177,39 @@ app.post("/", async (req, res) => {
 
 async function sendWhatsAppLink(parishadId, to) {
     try {
-        console.log(`[Background] Fetching link for Parishad: ${parishadId}`);
-        const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${parishadId}`, { headers: ABTYP_HEADERS });
+        console.log(`[Async] Starting message sequence for ${to}...`);
         
+        // 1. Get Link
+        const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${parishadId}`, { headers: ABTYP_HEADERS });
         const link = linkRes.data?.Data?.WhatsAppGroupLink;
+
         if (!link) {
-            console.error(`[Background] No link found in API response for ID: ${parishadId}`);
+            console.warn(`[Async] No group link found for Parishad ID: ${parishadId}`);
             return;
         }
 
-        console.log(`[Background] Sending Meta Request to: ${to}`);
+        // 2. Send WhatsApp
         const metaRes = await axios.post(`https://graph.facebook.com/v24.0/${PHONE_NUMBER_ID}/messages`, {
             messaging_product: "whatsapp",
             to: to,
             type: "text",
-            text: { body: `Welcome to ABTYP 🙏\n\nYour Link:\n${link}` }
+            text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad Group Link is below:\n${link}` }
         }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
 
-        console.log(`[Background] Meta API Success:`, metaRes.data);
+        console.log(`[Async] ✅ Message sent successfully! Meta ID: ${metaRes.data.messages[0].id}`);
+
     } catch (e) {
-        // This will tell you EXACTLY why Meta rejected the message
-        console.error("[Background] Error Details:", e.response?.data || e.message);
+        console.error("[Async] ❌ FAILED to send message:");
+        if (e.response) {
+            console.error("Meta API Response Error:", JSON.stringify(e.response.data));
+        } else {
+            console.error(e.message);
+        }
     }
 }
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 ABTYP Server Live on Port ${PORT}`);
+  console.log(`\n🚀 ABTYP Flow Server Live on Port ${PORT}`);
+  console.log(`Ready for interactions...\n`);
 });
