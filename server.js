@@ -18,6 +18,10 @@ const PHONE_NUMBER_ID = "908875015643505";
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PRIVATE_KEY = process.env.PRIVATE_KEY ? process.env.PRIVATE_KEY.replace(/\\n/g, "\n") : null;
 
+if (!PRIVATE_KEY) {
+    console.error("❌ CRITICAL ERROR: PRIVATE_KEY environment variable is missing!");
+}
+
 let cachedCountries = null;
 
 /* ---------------- HELPERS ---------------- */
@@ -43,12 +47,13 @@ app.post("/", async (req, res) => {
   let aesKey, requestIv, decryptedPayload;
 
   try {
-    // 1. Decrypt Data
+    // 1. Decrypt AES Key
     aesKey = crypto.privateDecrypt(
       { key: PRIVATE_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256", mgf1Hash: "sha256" },
       Buffer.from(encrypted_aes_key, "base64")
     );
 
+    // 2. Decrypt Payload
     const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
     requestIv = Buffer.from(initial_vector, "base64");
     const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
@@ -57,23 +62,32 @@ app.post("/", async (req, res) => {
     
     decryptedPayload = JSON.parse(decrypted);
 
-    // --- DEBUG LOGS ---
-    console.log("\n==================== NEW INTERACTION ====================");
-    console.log(`TYPE: ${decryptedPayload.action}`);
-    console.log("FULL DECRYPTED PAYLOAD:");
-    console.log(JSON.stringify(decryptedPayload, null, 2));
-    console.log("=========================================================\n");
-
     const { action, data } = decryptedPayload;
-    const senderNumber = decryptedPayload.flow_context?.sender_id || "919327447138"; // Fallback to your number for testing
+    const senderNumber = decryptedPayload.flow_context?.sender_id || "919327447138"; 
 
-    // Handle Health Check
+    console.log(`\n📱 ACTION: ${action} | USER: ${senderNumber}`);
+
+    // --- LOGIC HANDLING ---
+
     if (action === "ping") {
       return res.status(200).send(encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv));
     }
 
-    // Handle Data Fetching
     if (action === "INIT" || action === "data_exchange") {
+      
+      // CASE A: User clicked "Next" on the first screen
+      if (data?.action === "GO_TO_SUCCESS") {
+        console.log(`➡️ Routing to SUCCESS_SCREEN for Parishad: ${data.parishad_id}`);
+        return res.status(200).send(encryptResponse({
+            version: "7.1",
+            screen: "SUCCESS_SCREEN",
+            data: {
+                parishad_id: data.parishad_id
+            }
+        }, aesKey, requestIv));
+      }
+
+      // CASE B: Dropdown Logic for LOCATION_SCREEN
       let resp = {
         version: "7.1",
         screen: "LOCATION_SCREEN",
@@ -82,52 +96,40 @@ app.post("/", async (req, res) => {
           state_list: [],
           parishad_list: [],
           is_state_enabled: false,
-          is_parishad_enabled: false,
-          status_text: "",
-          is_submit_enabled: false
+          is_parishad_enabled: false
         }
       };
 
       if (!cachedCountries) {
-        console.log("Fetching Countries...");
         const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
         cachedCountries = mapList(cRes.data?.Data);
       }
       resp.data.country_list = cachedCountries;
 
       if (data?.country_id) {
-        console.log(`Fetching States for: ${data.country_id}`);
         const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
         resp.data.state_list = mapList(sRes.data?.Data);
         resp.data.is_state_enabled = resp.data.state_list.length > 0;
       }
 
       if (data?.state_id) {
-        console.log(`Fetching Parishads for: ${data.state_id}`);
         const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
         resp.data.parishad_list = mapList(pRes.data?.Data);
         resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
       }
 
-      if (data?.parishad_id) {
-        resp.data.status_text = "✅ Parishad selected! Please click Finish.";
-        resp.data.is_submit_enabled = true;
-      }
-
       return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
     }
 
-    // Handle Final Submission (The "Finish" Button)
+    // CASE C: Final Submission (Success Screen "Finish" Button)
     if (action === "complete") {
-      console.log("🎯 FINISH BUTTON CLICKED!");
       const parishadId = data?.parishad_id;
+      console.log(`🎯 TARGET HIT: Complete Action received for Parishad: ${parishadId}`);
 
       if (parishadId) {
-        console.log(`🔗 Triggering Link API for Parishad ID: ${parishadId}`);
-        // Run background function
-        sendWhatsAppLink(parishadId, senderNumber);
+          sendWhatsAppLink(parishadId, senderNumber);
       } else {
-        console.error("❌ ERROR: Finish clicked but 'parishad_id' is missing from payload.");
+          console.error("❌ ERROR: Complete action received but parishad_id is missing.");
       }
 
       return res.status(200).send(encryptResponse({ 
@@ -141,7 +143,7 @@ app.post("/", async (req, res) => {
     if (aesKey && requestIv) {
         return res.status(200).send(encryptResponse({ version: "7.1", error: "system_error" }, aesKey, requestIv));
     }
-    return res.status(500).json({ error: "decryption_failed" });
+    return res.status(500).json({ error: "error" });
   }
 });
 
@@ -149,32 +151,27 @@ app.post("/", async (req, res) => {
 
 async function sendWhatsAppLink(parishadId, to) {
     try {
-        console.log(`[Background] Fetching link from ABTYP for ID: ${parishadId}...`);
+        console.log(`[Background] Fetching link for ID: ${parishadId}...`);
         const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${parishadId}`, { headers: ABTYP_HEADERS });
-        
         const link = linkRes.data?.Data?.WhatsAppGroupLink;
 
         if (link) {
             console.log(`[Background] Sending WhatsApp to: ${to}`);
-            const metaRes = await axios.post(`https://graph.facebook.com/v24.0/${PHONE_NUMBER_ID}/messages`, {
+            await axios.post(`https://graph.facebook.com/v24.0/${PHONE_NUMBER_ID}/messages`, {
                 messaging_product: "whatsapp",
                 to: to,
                 type: "text",
                 text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad Group Link:\n${link}` }
             }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
 
-            console.log(`🚀 SUCCESS: Message sent! Meta ID: ${metaRes.data.messages[0].id}`);
+            console.log(`🚀 SUCCESS: Message sent to ${to}`);
         } else {
             console.warn(`⚠️ API Success but no link found for Parishad ${parishadId}`);
         }
     } catch (e) {
-        console.error("❌ Background Sender Error:");
-        console.error(e.response?.data || e.message);
+        console.error("❌ Background Sender Error:", e.response?.data || e.message);
     }
 }
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`\n🚀 ABTYP SERVER ONLINE ON PORT ${PORT}`);
-  console.log("Waiting for Flow interactions...\n");
-});
+app.listen(PORT, () => console.log(`🚀 ABTYP Server Live on Port ${PORT}`));
