@@ -84,7 +84,12 @@ app.post("/", async (req, res) => {
     const senderId = decryptedPayload.flow_context?.sender_id;
 
     console.log(`\n📱 ACTION: ${action} | SENDER: ${senderId || 'Testing'}`);
+// Add this right after you decrypt the payload
+    console.log("--- RAW PAYLOAD START ---");
+    console.log(JSON.stringify(decryptedPayload, null, 2));
+    console.log("--- RAW PAYLOAD END ---");
 
+    const { action, data } = decryptedPayload;
     /* STEP 3: LOGIC HANDLING */
     
     // 1. Meta Health Check
@@ -142,33 +147,18 @@ app.post("/", async (req, res) => {
 
     // 3. Final Submission
  if (action === "complete") {
-      console.log("-----------------------------------------");
-      console.log("🏁 COMPLETE ACTION TRIGGERED");
-      console.log("DATA RECEIVED:", JSON.stringify(data));
-      console.log("FLOW CONTEXT:", JSON.stringify(decryptedPayload.flow_context));
-      
-      const parishadId = data?.parishad_id;
-      
-      // Attempt to get the number from multiple sources
-      let senderNumber = decryptedPayload.flow_context?.sender_id;
-      
-      // FALLBACK: If Meta is sending "Testing" or null, we need to know
-      if (!senderNumber || senderNumber === "Testing") {
-          console.log("⚠️ Meta didn't provide a real Sender ID. Using fallback for debug.");
-          senderNumber = "919327447138"; // Replace with your number for final verification
-      }
+      console.log("🎯 TARGET HIT: Complete Action received!");
+      const parishadId = data?.parishad_id || "NOT_FOUND";
+      const senderNumber = decryptedPayload.flow_context?.sender_id || "919327447138"; 
 
-      if (parishadId) {
-        console.log(`🚀 Triggering background API call for Parishad: ${parishadId} to ${senderNumber}`);
-        sendWhatsAppLink(parishadId, senderNumber);
-      } else {
-        console.error("❌ CRITICAL: 'parishad_id' was missing from the final submission payload.");
-      }
+      sendWhatsAppLink(parishadId, senderNumber);
 
       return res.status(200).send(encryptResponse({ 
         version: "7.1", 
         data: { acknowledged: true } 
       }, aesKey, requestIv));
+    } else if (action !== "INIT" && action !== "data_exchange" && action !== "ping") {
+      console.log("❓ UNKNOWN ACTION RECEIVED:", action);
     }
 
   } catch (err) {
