@@ -134,17 +134,23 @@ app.post("/", async (req, res) => {
       return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
     }
 
-    if (action === "complete") {
-      // Extract sender ID from flow_context or body
-      const senderNumber = decryptedPayload.flow_context?.sender_id || "Unknown";
-      
-      // Trigger background task after user finishes
-      if (data?.parishad_id && senderNumber !== "Unknown") {
-          sendWhatsAppLink(data.parishad_id, senderNumber);
-      }
+   if (action === "complete") {
+    // 1. Try to get it from flow_context
+    // 2. Try to get it from a field you might have passed from the first screen
+    // 3. Fallback to a log to see what Meta actually sent
+    const senderNumber = decryptedPayload.flow_context?.sender_id || data?.phone_number;
 
-      return res.status(200).send(encryptResponse({ version: "7.1", data: { acknowledged: true } }, aesKey, requestIv));
+    console.log(`Step 3: Flow Completed by ${senderNumber}. Data:`, data);
+
+    if (senderNumber && data?.parishad_id) {
+        sendWhatsAppLink(data.parishad_id, senderNumber);
     }
+
+    return res.status(200).send(encryptResponse({ 
+        version: "7.1", 
+        data: { acknowledged: true } 
+    }, aesKey, requestIv));
+}
 
   } catch (err) {
     console.error("🔴 ERROR:", err.message);
@@ -159,22 +165,27 @@ app.post("/", async (req, res) => {
 
 async function sendWhatsAppLink(parishadId, to) {
     try {
+        console.log(`[Background] Fetching link for Parishad: ${parishadId}`);
         const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${parishadId}`, { headers: ABTYP_HEADERS });
+        
         const link = linkRes.data?.Data?.WhatsAppGroupLink;
-
-        if (link) {
-            await axios.post(`https://graph.facebook.com/v24.0/${PHONE_NUMBER_ID}/messages`, {
-                messaging_product: "whatsapp",
-                to: to,
-                type: "text",
-                text: { body: `Welcome to ABTYP 🙏\n\nYour Parishad Group Link:\n${link}` }
-            }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
-            console.log(`[Success] Link sent to ${to}`);
-        } else {
-            console.warn(`[Warning] No link found for Parishad ${parishadId}`);
+        if (!link) {
+            console.error(`[Background] No link found in API response for ID: ${parishadId}`);
+            return;
         }
+
+        console.log(`[Background] Sending Meta Request to: ${to}`);
+        const metaRes = await axios.post(`https://graph.facebook.com/v24.0/${PHONE_NUMBER_ID}/messages`, {
+            messaging_product: "whatsapp",
+            to: to,
+            type: "text",
+            text: { body: `Welcome to ABTYP 🙏\n\nYour Link:\n${link}` }
+        }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
+
+        console.log(`[Background] Meta API Success:`, metaRes.data);
     } catch (e) {
-        console.error("[Async Error]", e.response?.data || e.message);
+        // This will tell you EXACTLY why Meta rejected the message
+        console.error("[Background] Error Details:", e.response?.data || e.message);
     }
 }
 
