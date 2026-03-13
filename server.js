@@ -183,23 +183,29 @@ app.post("/", async (req, res) => {
 /* ---------------- BACKGROUND SENDER ---------------- */
 
 async function sendWhatsAppLink(parishadId, to) {
-    try {
-        console.log(`[Async] Getting link for Parishad: ${parishadId}`);
-        const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${parishadId}`, { headers: ABTYP_HEADERS });
-        const link = linkRes.data?.Data?.WhatsAppGroupLink;
+    try {
+        console.log(`[Async] Getting link for Parishad: ${parishadId}`);
+        const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${parishadId}`, { headers: ABTYP_HEADERS });
+        const link = linkRes.data?.Data?.WhatsAppGroupLink;
 
-        if (link) {
-            console.log(`[Async] Sending link to ${to}`);
-            await axios.post(`https://graph.facebook.com/v24.0/${PHONE_NUMBER_ID}/messages`, {
-                messaging_product: "whatsapp",
-                to: to,
-                type: "text",
-                text: { body: `Welcome to ABTYP 🙏\n\nYour Link:\n${link}` }
-            }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
-        }
-    } catch (e) {
-        console.error("[Async] Send Error:", e.message);
-    }
+        if (link) {
+            console.log(`[Async] Sending link to ${to}`);
+            try {
+                await axios.post(`https://graph.facebook.com/v24.0/${PHONE_NUMBER_ID}/messages`, {
+                    messaging_product: "whatsapp",
+                    to: to,
+                    type: "text",
+                    text: { body: `Welcome to ABTYP 🙏\n\nYour Link:\n${link}` }
+                }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
+                console.log("✅ Message sent successfully!");
+            } catch (metaErr) {
+                // THIS WILL TELL US THE EXACT REASON (e.g., "Template required")
+                console.error("❌ Meta API Error Detail:", JSON.stringify(metaErr.response?.data, null, 2));
+            }
+        }
+    } catch (e) {
+        console.error("[Async] General Error:", e.message);
+    }
 }
 
 const PORT = process.env.PORT || 3000;
