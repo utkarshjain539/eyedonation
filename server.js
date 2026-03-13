@@ -28,17 +28,46 @@ app.post("/", async (req, res) => {
     decipher.setAuthTag(flowBuffer.slice(-16));
     const decryptedPayload = JSON.parse(Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8"));
 
-    const { action, data } = decryptedPayload;
-    console.log(`📱 ACTION: ${action} | DATA: ${JSON.stringify(data)}`);
+    const { action, data, screen } = decryptedPayload;
+    console.log(`📱 ACTION: ${action} | SCREEN: ${screen} | DATA: ${JSON.stringify(data)}`);
 
     if (action === "ping") return res.status(200).send(encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv));
 
     if (action === "INIT" || action === "data_exchange") {
+      
+      // --- DEATH FLOW: JUMP TO SECOND SCREEN ---
+      if (data?.action === "GO_TO_DETAILS") {
+        return res.status(200).send(encryptResponse({
+          version: "7.1",
+          screen: "DEATH_DETAILS_SCREEN",
+          data: {
+            prev_data: { name: data.full_name, mobile: data.mobile, age: data.age, gender: data.gender, parishad_id: data.parishad_id }
+          }
+        }, aesKey, requestIv));
+      }
+
+      // --- SHARED DROPDOWN LOGIC ---
+      // Determine which screen to return to (Death Flow vs Parishad Flow)
+      // If the incoming screen is DEATH_INFO_SCREEN, stay there.
+      const currentScreen = (screen === "DEATH_INFO_SCREEN") ? "DEATH_INFO_SCREEN" : "LOCATION_SCREEN";
+
       let resp = {
         version: "7.1",
-        screen: "LOCATION_SCREEN",
-        data: { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false, can_move_next: false }
+        screen: currentScreen,
+        data: { 
+          country_list: [], 
+          state_list: [], 
+          parishad_list: [], 
+          is_state_enabled: false, 
+          is_parishad_enabled: false, 
+          can_move_next: false 
+        }
       };
+
+      // Add gender list if we are in the Death Flow
+      if (currentScreen === "DEATH_INFO_SCREEN") {
+        resp.data.gender_list = [{id: "Male", title: "Male"}, {id: "Female", title: "Female"}];
+      }
 
       if (!cachedCountries) {
         const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
@@ -64,11 +93,8 @@ app.post("/", async (req, res) => {
     }
 
     if (action === "complete") {
-      console.log(`✅ COMPLETE ACTION ACKNOWLEDGED. WEBHOOK WILL RECEIVE DATA.`);
-      return res.status(200).send(encryptResponse({ 
-        version: "7.1", 
-        data: { acknowledged: true } 
-      }, aesKey, requestIv));
+      console.log(`✅ COMPLETE ACTION ACKNOWLEDGED.`);
+      return res.status(200).send(encryptResponse({ version: "7.1", data: { acknowledged: true } }, aesKey, requestIv));
     }
 
   } catch (err) {
@@ -77,4 +103,4 @@ app.post("/", async (req, res) => {
   }
 });
 
-app.listen(3000, () => console.log("🚀 Single-Screen Server Live"));
+app.listen(3000, () => console.log("🚀 Multi-Flow Server Live"));
