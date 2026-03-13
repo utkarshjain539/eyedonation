@@ -58,7 +58,9 @@ const decryptRequest = (body) => {
   );
   return { aesKey, requestIv, decryptedPayload };
 };
-
+app.get("/", (req, res) => {
+  res.status(200).json({ status: "ABTYP Server is running 🚀" });
+});
 // ─── WEBHOOK VERIFICATION ─────────────────────────────────────────────────────
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
