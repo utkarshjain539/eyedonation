@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 const ABTYP_HEADERS = { "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%", "Content-Type": "application/json" };
-const PHONE_NUMBER_ID = "908875015643505";
+const PHONE_NUMBER_ID = "185660454629908";
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PRIVATE_KEY = process.env.PRIVATE_KEY?.replace(/\\n/g, "\n");
 
@@ -77,10 +77,13 @@ app.post("/", async (req, res) => {
     }
 
     if (action === "complete") {
-      console.log(`✅ FINISHED! Parishad: ${data.parishad_id}`);
-      sendWhatsAppLink(data.parishad_id, sender);
-      return res.status(200).send(encryptResponse({ version: "7.1", data: { acknowledged: true } }, aesKey, requestIv));
-    }
+  console.log("✅ Flow terminal state reached. Closing flow on device.");
+  // We do NOT send the WhatsApp message here. We let the Webhook handle it.
+  return res.status(200).send(encryptResponse({ 
+    version: "7.1", 
+    data: { acknowledged: true } 
+  }, aesKey, requestIv));
+}
 
   } catch (err) {
     console.error("🔴 Server Error:", err.message);
