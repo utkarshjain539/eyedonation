@@ -29,45 +29,51 @@ app.post("/", async (req, res) => {
     const decryptedPayload = JSON.parse(Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8"));
 
     const { action, data, flow_token } = decryptedPayload;
-    
-    // Determine which flow we are in based on the token
-    const isDeathFlow = flow_token && flow_token.includes("death");
+    console.log(`📱 [${action}] Token: ${flow_token} | Data: ${JSON.stringify(data)}`);
 
     if (action === "ping") return res.status(200).send(encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv));
 
     if (action === "INIT" || action === "data_exchange") {
       
-      // 1. Handle the Jump to Screen 2 in Death Flow
+      // --- CRITICAL: THE SCREEN JUMP LOGIC ---
       if (data?.action === "GO_TO_DETAILS") {
+        console.log("🚀 JUMPING TO SCREEN 2");
         return res.status(200).send(encryptResponse({
           version: "7.1",
-          screen: "DEATH_DETAILS_SCREEN",
+          screen: "DEATH_DETAILS_SCREEN", // The ID of your second screen
           data: {
-            prev_data: { name: data.full_name, mobile: data.mobile, age: data.age, gender: data.gender, parishad_id: data.parishad_id }
+            prev_data: { 
+                name: data.full_name, 
+                mobile: data.mobile, 
+                age: data.age, 
+                gender: data.gender, 
+                p_id: data.parishad_id 
+            }
           }
         }, aesKey, requestIv));
       }
 
-      // 2. Setup the Response Object
+      // --- DROPDOWN LOGIC ---
+      // We check if the token contains "death" to know which screen to refresh
+      const isDeath = flow_token && flow_token.toLowerCase().includes("death");
+      const screenId = isDeath ? "DEATH_INFO_SCREEN" : "LOCATION_SCREEN";
+
       let resp = {
         version: "7.1",
-        screen: isDeathFlow ? "DEATH_INFO_SCREEN" : "LOCATION_SCREEN",
+        screen: screenId,
         data: { 
-          country_list: [], 
-          state_list: [], 
-          parishad_list: [], 
-          is_state_enabled: false, 
-          is_parishad_enabled: false,
-          can_move_next: false 
+            country_list: [], 
+            state_list: [], 
+            parishad_list: [], 
+            is_state_enabled: false, 
+            is_parishad_enabled: false 
         }
       };
 
-      // Add Gender list only for Death Flow
-      if (isDeathFlow) {
+      if (isDeath) {
         resp.data.gender_list = [{id: "Male", title: "Male"}, {id: "Female", title: "Female"}];
       }
 
-      // 3. Fetch Country/State/Parishad (Logic shared by both)
       if (!cachedCountries) {
         const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
         cachedCountries = (cRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
@@ -84,9 +90,6 @@ app.post("/", async (req, res) => {
         resp.data.parishad_list = (pRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
         resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
       }
-      if (data?.p_id) {
-        resp.data.can_move_next = true;
-      }
 
       return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
     }
@@ -101,4 +104,4 @@ app.post("/", async (req, res) => {
   }
 });
 
-app.listen(3000, () => console.log("🚀 Dual-Flow Server Live"));
+app.listen(3000, () => console.log("🚀 Multi-Flow Server Live"));
