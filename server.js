@@ -17,12 +17,22 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY?.replace(/\\n/g, "\n");
 let cachedCountries = null;
 
 function encryptResponse(data, aesKey, iv) {
-  const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, iv);
+
+  const flippedIv = Buffer.alloc(iv.length);
+
+  for (let i = 0; i < iv.length; i++) {
+    flippedIv[i] = ~iv[i];
+  }
+
+  const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, flippedIv);
+
   const encrypted = Buffer.concat([
     cipher.update(JSON.stringify(data), "utf8"),
     cipher.final()
   ]);
+
   const tag = cipher.getAuthTag();
+
   return Buffer.concat([encrypted, tag]).toString("base64");
 }
 
