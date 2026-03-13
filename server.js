@@ -1,7 +1,6 @@
 const express = require("express");
 const crypto = require("crypto");
 const axios = require("axios");
-
 const app = express();
 app.use(express.json());
 
@@ -33,65 +32,58 @@ app.post("/", async (req, res) => {
     const decryptedPayload = JSON.parse(Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8"));
 
     const { action, data } = decryptedPayload;
-    const sender = decryptedPayload.flow_context?.sender_id || "918488861504";
+    const sender = decryptedPayload.flow_context?.sender_id;
 
     console.log(`📱 [${action}] | User: ${sender}`);
 
     if (action === "ping") return res.status(200).send(encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv));
 
     if (action === "INIT" || action === "data_exchange") {
-      let resp = {
-        version: "7.1",
-        screen: "LOCATION_SCREEN",
-        data: {
-          country_list: [],
-          state_list: [],
-          parishad_list: [],
-          is_state_enabled: false,
-          is_parishad_enabled: false,
-          is_submit_enabled: false
-        }
-      };
+      // THE JUMP LOGIC
+      if (data?.action === "NEXT") {
+        console.log("🚀 Switching to SUCCESS_SCREEN");
+        return res.status(200).send(encryptResponse({
+          version: "7.1",
+          screen: "SUCCESS_SCREEN",
+          data: { final_id: data.p_id }
+        }, aesKey, requestIv));
+      }
 
-      // 1. Countries
+      // THE DROPDOWN LOGIC
+      let resp = { version: "7.1", screen: "LOCATION_SCREEN", data: { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false, can_move_next: false } };
+      
       if (!cachedCountries) {
         const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
         cachedCountries = (cRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
       }
       resp.data.country_list = cachedCountries;
 
-      // 2. States
-      if (data?.country_id) {
-        const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.country_id}`, { headers: ABTYP_HEADERS });
+      if (data?.c_id) {
+        const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.c_id}`, { headers: ABTYP_HEADERS });
         resp.data.state_list = (sRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
         resp.data.is_state_enabled = resp.data.state_list.length > 0;
       }
-
-      // 3. Parishads
-      if (data?.state_id) {
-        const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.state_id}`, { headers: ABTYP_HEADERS });
+      if (data?.s_id) {
+        const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.s_id}`, { headers: ABTYP_HEADERS });
         resp.data.parishad_list = (pRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
         resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
       }
-
-      // 4. Submit
-      if (data?.parishad_id) {
-        resp.data.is_submit_enabled = true;
+      if (data?.p_id) {
+        resp.data.can_move_next = true;
       }
 
       return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
     }
 
     if (action === "complete") {
-      const pId = data?.final_parishad_id;
-      console.log(`✅ COMPLETE! ID: ${pId} | Sender: ${sender}`);
-      if (pId) sendWhatsAppLink(pId, sender);
+      console.log(`✅ ACTION COMPLETE! Final ID: ${data.parishad_id}`);
+      sendWhatsAppLink(data.parishad_id, sender);
       return res.status(200).send(encryptResponse({ version: "7.1", data: { acknowledged: true } }, aesKey, requestIv));
     }
 
   } catch (err) {
     console.error("🔴 Error:", err.message);
-    return res.status(200).json({ status: "fail" });
+    return res.status(200).json({ error: "fail" });
   }
 });
 
