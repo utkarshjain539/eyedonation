@@ -5,10 +5,7 @@ const app = express();
 app.use(express.json());
 
 const ABTYP_HEADERS = { "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%", "Content-Type": "application/json" };
-const PHONE_NUMBER_ID = "185660454629908";
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PRIVATE_KEY = process.env.PRIVATE_KEY?.replace(/\\n/g, "\n");
-
 let cachedCountries = null;
 
 const encryptResponse = (data, aesKey, iv) => {
@@ -32,27 +29,17 @@ app.post("/", async (req, res) => {
     const decryptedPayload = JSON.parse(Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8"));
 
     const { action, data } = decryptedPayload;
-    const sender = decryptedPayload.flow_context?.sender_id || "919327447138";
-
     console.log(`📱 ACTION: ${action} | DATA: ${JSON.stringify(data)}`);
 
     if (action === "ping") return res.status(200).send(encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv));
 
     if (action === "INIT" || action === "data_exchange") {
-      
-      // JUMP TO SECOND SCREEN
-      if (data?.action === "GO_TO_FINISH") {
-        console.log("🚀 SUCCESS: Jumping to SUMMARY_SCREEN");
-        return res.status(200).send(encryptResponse({
-          version: "7.1",
-          screen: "SUMMARY_SCREEN",
-          data: { final_p_id: data.p_id }
-        }, aesKey, requestIv));
-      }
+      let resp = {
+        version: "7.1",
+        screen: "LOCATION_SCREEN",
+        data: { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false, can_move_next: false }
+      };
 
-      // DROPDOWN LOGIC
-      let resp = { version: "7.1", screen: "LOCATION_SCREEN", data: { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false, can_move_next: false } };
-      
       if (!cachedCountries) {
         const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
         cachedCountries = (cRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
@@ -77,31 +64,17 @@ app.post("/", async (req, res) => {
     }
 
     if (action === "complete") {
-  console.log("✅ Flow terminal state reached. Closing flow on device.");
-  // We do NOT send the WhatsApp message here. We let the Webhook handle it.
-  return res.status(200).send(encryptResponse({ 
-    version: "7.1", 
-    data: { acknowledged: true } 
-  }, aesKey, requestIv));
-}
+      console.log(`✅ COMPLETE ACTION ACKNOWLEDGED. WEBHOOK WILL RECEIVE DATA.`);
+      return res.status(200).send(encryptResponse({ 
+        version: "7.1", 
+        data: { acknowledged: true } 
+      }, aesKey, requestIv));
+    }
 
   } catch (err) {
     console.error("🔴 Server Error:", err.message);
-    return res.status(200).json({ status: "fail" });
+    return res.status(200).json({ status: "error" });
   }
 });
 
-async function sendWhatsAppLink(pId, to) {
-    try {
-        const linkRes = await axios.get(`https://api.abtyp.org/w0/get-whatsapp-group-link?ParishadId=${pId}`, { headers: ABTYP_HEADERS });
-        const link = linkRes.data?.Data?.WhatsAppGroupLink;
-        if (link) {
-            await axios.post(`https://graph.facebook.com/v24.0/${PHONE_NUMBER_ID}/messages`, {
-                messaging_product: "whatsapp", to: to, type: "text", text: { body: `Welcome to ABTYP 🙏\n\nLink:\n${link}` }
-            }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
-            console.log("🚀 SENT!");
-        }
-    } catch (e) { console.error("❌ API Error:", e.response?.data || e.message); }
-}
-
-app.listen(3000, () => console.log("🚀 Server Live"));
+app.listen(3000, () => console.log("🚀 Single-Screen Server Live"));
