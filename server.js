@@ -18,20 +18,39 @@ const encryptResponse = (data, aesKey, iv) => {
 
 app.post("/", async (req, res) => {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = req.body;
+  
+  // If no encrypted key, it's just a health check from Meta
   if (!encrypted_aes_key) return res.status(200).json({ status: "active" });
 
- try {
-    const { action, data, flow_token } = decryptedPayload;
-    
-    // 🎯 IDENTIFY THE FLOW
-    // We check if the token from your PHP template contains "death"
+  let aesKey, requestIv;
+
+  try {
+    // 1. Decrypt AES Key
+    aesKey = crypto.privateDecrypt({ 
+        key: PRIVATE_KEY, 
+        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, 
+        oaepHash: "sha256", 
+        mgf1Hash: "sha256" 
+    }, Buffer.from(encrypted_aes_key, "base64"));
+
+    // 2. Decrypt Flow Data
+    const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
+    requestIv = Buffer.from(initial_vector, "base64");
+    const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
+    decipher.setAuthTag(flowBuffer.slice(-16));
+    const decryptedPayload = JSON.parse(Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8"));
+
+    const { action, data, flow_token, screen } = decryptedPayload;
+    console.log(`📱 ACTION: ${action} | TOKEN: ${flow_token}`);
+
+    // Identify Flow
     const isDeathFlow = flow_token && flow_token.toLowerCase().includes("death");
 
     if (action === "ping") return res.status(200).send(encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv));
 
     if (action === "INIT" || action === "data_exchange") {
       
-      // 1. Handle Screen Jump for Death Flow
+      // Handle Screen Jump
       if (data?.action === "GO_TO_DETAILS") {
         return res.status(200).send(encryptResponse({
           version: "7.1",
@@ -42,26 +61,18 @@ app.post("/", async (req, res) => {
         }, aesKey, requestIv));
       }
 
-      // 2. Decide which screen to show based on the Flow
-      // This PREVENTS the "Unexpected screen [LOCATION_SCREEN]" error
+      // Prepare Response
       let resp = {
         version: "7.1",
-        screen: isDeathFlow ? "DEATH_INFO_SCREEN" : "LOCATION_SCREEN", 
-        data: { 
-          country_list: [], 
-          state_list: [], 
-          parishad_list: [], 
-          is_state_enabled: false, 
-          is_parishad_enabled: false,
-          can_move_next: false 
-        }
+        screen: isDeathFlow ? "DEATH_INFO_SCREEN" : "LOCATION_SCREEN",
+        data: { country_list: [], state_list: [], parishad_list: [], is_state_enabled: false, is_parishad_enabled: false, can_move_next: false }
       };
 
       if (isDeathFlow) {
         resp.data.gender_list = [{id: "Male", title: "Male"}, {id: "Female", title: "Female"}];
       }
 
-      // 3. Fetch Data (Logic shared by both)
+      // Data Fetching
       if (!cachedCountries) {
         const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
         cachedCountries = (cRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
@@ -78,8 +89,7 @@ app.post("/", async (req, res) => {
         resp.data.parishad_list = (pRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
         resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
       }
-      
-      if (data?.p_id) { resp.data.can_move_next = true; }
+      if (data?.p_id) resp.data.can_move_next = true;
 
       return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
     }
@@ -87,10 +97,14 @@ app.post("/", async (req, res) => {
     if (action === "complete") {
       return res.status(200).send(encryptResponse({ version: "7.1", data: { acknowledged: true } }, aesKey, requestIv));
     }
+
   } catch (err) {
     console.error("🔴 Server Error:", err.message);
-    return res.status(200).json({ status: "error" });
+    
+    // 🎯 CRITICAL: Even on error, we must return a 200 Encrypted response if possible, 
+    // or at least a 200 OK to prevent the "Base64" error in the UI.
+    return res.status(200).send("error"); 
   }
 });
 
-app.listen(3000, () => console.log("🚀 Multi-Flow Server Live"));
+app.listen(3000, () => console.log("🚀 Server Live"));
