@@ -36,15 +36,23 @@ app.post("/", async (req, res) => {
     if (action === "INIT" || action === "data_exchange") {
       
       // --- THE JUMP LOGIC ---
-      if (data?.action === "GO_TO_DETAILS") {
+     // 🚀 THIS IS THE PART THAT MOVES THE SCREEN
+    if (data?.action === "TRIGGER_JUMP") {
+        console.log("➡️ COMMANDING JUMP TO SCREEN 2");
         return res.status(200).send(encryptResponse({
-          version: "7.1",
-          screen: "DEATH_DETAILS_SCREEN",
-          data: {
-            prev_data: { name: data.full_name, mobile: data.mobile, age: data.age, gender: data.gender, p_id: data.parishad_id }
-          }
+            version: "7.1",
+            screen: "DEATH_DETAILS_SCREEN", // <--- MUST MATCH YOUR SECOND SCREEN ID
+            data: {
+                prev_data: { 
+                    name: data.full_name, 
+                    mobile: data.mobile, 
+                    age: data.age, 
+                    gender: data.gender, 
+                    p_id: data.parishad_id 
+                }
+            }
         }, aesKey, requestIv));
-      }
+    }
 
       // --- SCREEN DETERMINATION ---
       const isDeathFlow = flow_token && flow_token.toLowerCase().includes("death");
