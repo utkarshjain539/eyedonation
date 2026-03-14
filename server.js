@@ -50,18 +50,28 @@ app.post("/", async (req, res) => {
 
     if (action === "INIT" || action === "data_exchange") {
       
+      // Safety: Define variables with fallback to null
+      const selectedCountry = data?.c_id || null;
+      const selectedState = data?.s_id || null;
+      const selectedParishad = data?.p_id || null;
+
       // Handle Screen Jump
       if (data?.action === "GO_TO_DETAILS") {
         return res.status(200).send(encryptResponse({
           version: "7.1",
           screen: "DEATH_DETAILS_SCREEN",
           data: {
-            prev_data: { name: data.full_name, mobile: data.mobile, age: data.age, gender: data.gender, p_id: data.parishad_id }
+            prev_data: { 
+                name: data.full_name || "", 
+                mobile: data.mobile || "", 
+                age: data.age || "", 
+                gender: data.gender || "", 
+                p_id: selectedParishad 
+            }
           }
         }, aesKey, requestIv));
       }
 
-      // Prepare Response
       let resp = {
         version: "7.1",
         screen: isDeathFlow ? "DEATH_INFO_SCREEN" : "LOCATION_SCREEN",
@@ -72,24 +82,28 @@ app.post("/", async (req, res) => {
         resp.data.gender_list = [{id: "Male", title: "Male"}, {id: "Female", title: "Female"}];
       }
 
-      // Data Fetching
+      // Fetch Countries
       if (!cachedCountries) {
         const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
         cachedCountries = (cRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
       }
       resp.data.country_list = cachedCountries;
 
-      if (data?.c_id) {
-        const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.c_id}`, { headers: ABTYP_HEADERS });
+      // Fetch States only if c_id exists
+      if (selectedCountry) {
+        const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${selectedCountry}`, { headers: ABTYP_HEADERS });
         resp.data.state_list = (sRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
         resp.data.is_state_enabled = resp.data.state_list.length > 0;
       }
-      if (data?.s_id) {
-        const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.s_id}`, { headers: ABTYP_HEADERS });
+
+      // Fetch Parishad only if s_id exists
+      if (selectedState) {
+        const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${selectedState}`, { headers: ABTYP_HEADERS });
         resp.data.parishad_list = (pRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
         resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
       }
-      if (data?.p_id) resp.data.can_move_next = true;
+      
+      if (selectedParishad) resp.data.can_move_next = true;
 
       return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
     }
