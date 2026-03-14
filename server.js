@@ -52,9 +52,12 @@ app.post("/", async (req, res) => {
 
         // 🎯 LOGIC: IDENTIFY WHICH FLOW IS CALLING
         // We check the token OR the current screen ID to avoid "Unexpected Screen" errors.
-        const isDeathFlow = (flow_token && flow_token.toLowerCase().includes("death")) || 
-                            (screen && screen.includes("DEATH_REG"));
+       const isDeathFlow = (flow_token && flow_token.toLowerCase().includes("death")) || 
+                    (decryptedPayload.screen && decryptedPayload.screen.includes("DEATH_REG"));
 
+console.log(`📱 LOG: Screen Received from Phone: ${decryptedPayload.screen}`);
+console.log(`📱 LOG: Token Received: ${flow_token}`);
+console.log(`📱 LOG: Calculated isDeathFlow: ${isDeathFlow}`);
         console.log(`📱 [${action}] Flow: ${isDeathFlow ? 'DEATH' : 'LOCATION'} | Screen: ${screen}`);
 
         // 3. Handle Ping
