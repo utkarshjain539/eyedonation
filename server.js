@@ -8,7 +8,7 @@ const ABTYP_HEADERS = { "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%
 const PRIVATE_KEY = process.env.PRIVATE_KEY?.replace(/\\n/g, "\n");
 let cachedCountries = null;
 
-app.get("/", (req, res) => res.status(200).send("ABTYP All-in-One Server Active"));
+app.get("/", (req, res) => res.status(200).send("ABTYP Single Screen Server Ready"));
 
 const encryptResponse = (data, aesKey, iv) => {
     const invIv = Buffer.alloc(iv.length);
@@ -22,26 +22,31 @@ app.post("/", async (req, res) => {
     const { encrypted_aes_key, encrypted_flow_data, initial_vector } = req.body;
     if (!encrypted_aes_key) return res.status(200).json({ status: "active" });
 
+    let aesKey, requestIv;
+
     try {
-        const aesKey = crypto.privateDecrypt({ key: PRIVATE_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256", mgf1Hash: "sha256" }, Buffer.from(encrypted_aes_key, "base64"));
+        aesKey = crypto.privateDecrypt({ 
+            key: PRIVATE_KEY, 
+            padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, 
+            oaepHash: "sha256", 
+            mgf1Hash: "sha256" 
+        }, Buffer.from(encrypted_aes_key, "base64"));
+
         const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
-        const requestIv = Buffer.from(initial_vector, "base64");
+        requestIv = Buffer.from(initial_vector, "base64");
         const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
         decipher.setAuthTag(flowBuffer.slice(-16));
         const decryptedPayload = JSON.parse(Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8"));
 
-       
-        if (action === "ping") return res.status(200).send(encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv));
-
-       const { action, data, flow_token, screen } = decryptedPayload;
+        const { action, data, flow_token, screen } = decryptedPayload;
         
-        // 🎯 FORCED FLOW IDENTIFICATION
+        // 🎯 Improved Flow Detection
         const isDeath = (flow_token && flow_token.toLowerCase().includes("death")) || 
                         (screen && screen.toLowerCase().includes("death"));
 
+        if (action === "ping") return res.status(200).send(encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv));
+
         if (action === "INIT" || action === "data_exchange") {
-            // IF it is death flow, we ONLY return DEATH_REG_SINGLE_SCREEN
-            // IF it is location flow, we ONLY return LOCATION_SCREEN
             const targetScreen = isDeath ? "DEATH_REG_SINGLE_SCREEN" : "LOCATION_SCREEN";
 
             let resp = {
@@ -55,7 +60,6 @@ app.post("/", async (req, res) => {
 
             if (isDeath) resp.data.gender_list = [{id: "Male", title: "Male"}, {id: "Female", title: "Female"}];
 
-            // Shared Data Fetching
             if (!cachedCountries) {
                 const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
                 cachedCountries = (cRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
@@ -72,6 +76,8 @@ app.post("/", async (req, res) => {
                 resp.data.parishad_list = (pRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
                 resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
             }
+            
+            // Allow submission only if parishad is selected
             if (data?.p_id) resp.data.can_submit = true;
 
             return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
@@ -82,6 +88,15 @@ app.post("/", async (req, res) => {
         }
 
     } catch (err) {
+        console.error("🔴 Server Error:", err.message);
+        // If decryption worked, we MUST return an encrypted error
+        if (aesKey && requestIv) {
+            return res.status(200).send(encryptResponse({ 
+                version: "7.1", 
+                data: { error: "Unexpected error occurred" } 
+            }, aesKey, requestIv));
+        }
+        // Last resort: Meta still expects a 200, but it will likely show "Decryption Failed"
         return res.status(200).send("error");
     }
 });
