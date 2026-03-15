@@ -30,17 +30,23 @@ app.post("/", async (req, res) => {
         decipher.setAuthTag(flowBuffer.slice(-16));
         const decryptedPayload = JSON.parse(Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8"));
 
-        const { action, data, flow_token, screen } = decryptedPayload;
-        
-        // Flow detection
-        const isDeath = (flow_token && flow_token.includes("death")) || (screen && screen.includes("DEATH"));
-
+       
         if (action === "ping") return res.status(200).send(encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv));
 
+       const { action, data, flow_token, screen } = decryptedPayload;
+        
+        // 🎯 FORCED FLOW IDENTIFICATION
+        const isDeath = (flow_token && flow_token.toLowerCase().includes("death")) || 
+                        (screen && screen.toLowerCase().includes("death"));
+
         if (action === "INIT" || action === "data_exchange") {
+            // IF it is death flow, we ONLY return DEATH_REG_SINGLE_SCREEN
+            // IF it is location flow, we ONLY return LOCATION_SCREEN
+            const targetScreen = isDeath ? "DEATH_REG_SINGLE_SCREEN" : "LOCATION_SCREEN";
+
             let resp = {
                 version: "7.1",
-                screen: isDeath ? "DEATH_REG_SINGLE_SCREEN" : "LOCATION_SCREEN",
+                screen: targetScreen,
                 data: { 
                     country_list: [], state_list: [], parishad_list: [], 
                     is_state_enabled: false, is_parishad_enabled: false, can_submit: false 
