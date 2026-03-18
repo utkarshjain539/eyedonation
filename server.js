@@ -31,12 +31,11 @@ app.post("/", async (req, res) => {
 
   try {
     aesKey = crypto.privateDecrypt({
-        key: PRIVATE_KEY,
-        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-        oaepHash: "sha256",
-        mgf1Hash: "sha256",
-      }, Buffer.from(encrypted_aes_key, "base64")
-    );
+      key: PRIVATE_KEY,
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+      oaepHash: "sha256",
+      mgf1Hash: "sha256",
+    }, Buffer.from(encrypted_aes_key, "base64"));
 
     const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
     requestIv = Buffer.from(initial_vector, "base64");
@@ -46,7 +45,7 @@ app.post("/", async (req, res) => {
 
     const { action, data, flow_token, screen } = decryptedPayload;
 
-    // 🎯 FLOW DETECTION
+    // 🎯 FLOW DETECTION LOGIC
     const isUserReg = (flow_token && flow_token.toLowerCase().includes("reg")) || (screen === "USER_REG_SCREEN");
     const isDeath = (flow_token && flow_token.toLowerCase().includes("death")) || (screen === "DEATH_REG_SINGLE_SCREEN");
 
@@ -92,6 +91,7 @@ app.post("/", async (req, res) => {
       return res.status(200).send(encryptResponse({ version: "7.1", data: { acknowledged: true } }, aesKey, requestIv));
     }
   } catch (err) {
+    console.error("Server Error:", err.message);
     if (aesKey && requestIv) return res.status(200).send(encryptResponse({ version: "7.1", data: { error: "error" } }, aesKey, requestIv));
     return res.status(200).send("error");
   }
