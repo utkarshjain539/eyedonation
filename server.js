@@ -7,7 +7,8 @@ app.use(express.json());
 
 const ABTYP_HEADERS = { 
     "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%", 
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
+    "User-Agent": "Mozilla/5.0" // Some Linux servers need this to avoid being blocked
 };
 
 const getPrivateKey = () => {
@@ -16,11 +17,14 @@ const getPrivateKey = () => {
     return key.replace(/\\n/g, "\n").trim();
 };
 
+let cachedCountries = null;
+
 const encryptResponse = (data, aesKey, iv) => {
     const invIv = Buffer.alloc(iv.length);
     for (let i = 0; i < iv.length; i++) invIv[i] = ~iv[i];
     const cipher = crypto.createCipheriv("aes-128-gcm", aesKey, invIv);
-    const enc = Buffer.concat([cipher.update(JSON.stringify(data), "utf8"), cipher.final()]);
+    const body = JSON.stringify(data);
+    const enc = Buffer.concat([cipher.update(body, "utf8"), cipher.final()]);
     return Buffer.concat([enc, cipher.getAuthTag()]).toString("base64");
 };
 
@@ -44,7 +48,7 @@ app.post("/", async (req, res) => {
         const decryptedPayload = JSON.parse(Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8"));
 
         const { action, data } = decryptedPayload;
-        console.log(`📱 [${action}] Incoming Data:`, JSON.stringify(data));
+        console.log(`📱 [${action}] Processing request...`);
 
         if (action === "INIT" || action === "data_exchange") {
             let resp = {
@@ -57,56 +61,47 @@ app.post("/", async (req, res) => {
                 }
             };
 
-            // 1. Fetch Countries
             try {
-                const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
-                console.log("🌐 Country API Raw:", JSON.stringify(cRes.data));
-                resp.data.country_list = (cRes.data?.Data || []).map(i => ({ 
-                    id: String(i.Id), // Meta REQUIRES ID to be a string
-                    title: i.Name 
-                }));
-            } catch (e) { console.error("❌ Country API Fail:", e.message); }
+                // 1. Countries
+                if (!cachedCountries) {
+                    const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS, timeout: 5000 });
+                    cachedCountries = (cRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
+                }
+                resp.data.country_list = cachedCountries;
 
-            // 2. Fetch States
-            const countryId = data?.country || data?.c_id;
-            if (countryId) {
-                try {
-                    const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${countryId}`, { headers: ABTYP_HEADERS });
-                    resp.data.state_list = (sRes.data?.Data || []).map(i => ({ 
-                        id: String(i.Id), 
-                        title: i.Name 
-                    }));
+                // 2. States
+                const countryId = data?.country || data?.c_id;
+                if (countryId) {
+                    const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${countryId}`, { headers: ABTYP_HEADERS, timeout: 5000 });
+                    resp.data.state_list = (sRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
                     resp.data.is_state_enabled = resp.data.state_list.length > 0;
-                } catch (e) { console.error("❌ State API Fail:", e.message); }
-            }
+                }
 
-            // 3. Fetch Parishads
-            const stateId = data?.state || data?.s_id;
-            if (stateId) {
-                try {
-                    const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${stateId}`, { headers: ABTYP_HEADERS });
-                    resp.data.parishad_list = (pRes.data?.Data || []).map(i => ({ 
-                        id: String(i.Id), 
-                        title: i.Name 
-                    }));
+                // 3. Parishads
+                const stateId = data?.state || data?.s_id;
+                if (stateId) {
+                    const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${stateId}`, { headers: ABTYP_HEADERS, timeout: 5000 });
+                    resp.data.parishad_list = (pRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
                     resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
-                } catch (e) { console.error("❌ Parishad API Fail:", e.message); }
+                }
+            } catch (apiErr) {
+                console.error("🌐 ABTYP API ERROR:", apiErr.message);
+                // Even if API fails, we must return a valid encrypted response so the flow doesn't crash
             }
             
             if (data?.parishad || data?.p_id) resp.data.can_submit = true;
 
-            const base64Response = encryptResponse(resp, aesKey, requestIv);
-            return res.status(200).send(base64Response);
+            return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
         }
 
         if (action === "complete") {
             return res.status(200).send(encryptResponse({ version: "7.1", data: { acknowledged: true } }, aesKey, requestIv));
         }
     } catch (err) {
-        console.error("🔴 Fatal Error:", err.message);
-        return res.status(500).send("Server Error");
+        console.error("🔴 Server Error:", err.message);
+        return res.status(500).send("Decryption/Logic Error");
     }
 });
 
 const PORT = process.env.PORT || 3004;
-app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Production Debug Server on port ${PORT}`));
+app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Linux Flow Server on port ${PORT}`));
