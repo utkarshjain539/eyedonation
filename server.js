@@ -7,13 +7,14 @@ app.use(express.json());
 
 const ABTYP_HEADERS = { 
     "api-Key": "ABTYP_API_SECRET_KEY_@ABTYP2023#@763^%ggjhg%", 
-    "Content-Type": "application/json" 
+    "Content-Type": "application/json"
 };
 
-const PRIVATE_KEY = process.env.PRIVATE_KEY?.replace(/\\n/g, "\n");
-let cachedCountries = null;
-
-app.get("/", (req, res) => res.status(200).send("ABTYP Registration Server Live"));
+const getPrivateKey = () => {
+    let key = process.env.PRIVATE_KEY;
+    if (!key) return null;
+    return key.replace(/\\n/g, "\n").trim();
+};
 
 const encryptResponse = (data, aesKey, iv) => {
     const invIv = Buffer.alloc(iv.length);
@@ -28,6 +29,8 @@ app.post("/", async (req, res) => {
     if (!encrypted_aes_key) return res.status(200).json({ status: "active" });
 
     let aesKey, requestIv;
+    const PRIVATE_KEY = getPrivateKey();
+
     try {
         aesKey = crypto.privateDecrypt({ 
             key: PRIVATE_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, 
@@ -40,20 +43,13 @@ app.post("/", async (req, res) => {
         decipher.setAuthTag(flowBuffer.slice(-16));
         const decryptedPayload = JSON.parse(Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8"));
 
-        const { action, data, flow_token, screen } = decryptedPayload;
-        
-        // 🎯 LOG TO DEBUG
-        console.log(`📱 [${action}] Screen: ${screen} | Data: ${JSON.stringify(data)}`);
-
-        if (action === "ping") return res.status(200).send(encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv));
+        const { action, data } = decryptedPayload;
+        console.log(`📱 [${action}] Incoming Data:`, JSON.stringify(data));
 
         if (action === "INIT" || action === "data_exchange") {
-            // Force return to USER_REG_SCREEN to avoid "Unexpected Screen" errors
-            const targetScreen = "USER_REG_SCREEN";
-
             let resp = {
                 version: "7.1",
-                screen: targetScreen,
+                screen: "USER_REG_SCREEN",
                 data: { 
                     gender_list: [{id: "Male", title: "Male"}, {id: "Female", title: "Female"}],
                     country_list: [], state_list: [], parishad_list: [], 
@@ -61,44 +57,56 @@ app.post("/", async (req, res) => {
                 }
             };
 
-            // 1. Countries
-            if (!cachedCountries) {
+            // 1. Fetch Countries
+            try {
                 const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
-                cachedCountries = (cRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
-            }
-            resp.data.country_list = cachedCountries;
+                console.log("🌐 Country API Raw:", JSON.stringify(cRes.data));
+                resp.data.country_list = (cRes.data?.Data || []).map(i => ({ 
+                    id: String(i.Id), // Meta REQUIRES ID to be a string
+                    title: i.Name 
+                }));
+            } catch (e) { console.error("❌ Country API Fail:", e.message); }
 
-            // 2. States
+            // 2. Fetch States
             const countryId = data?.country || data?.c_id;
             if (countryId) {
-                const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${countryId}`, { headers: ABTYP_HEADERS });
-                resp.data.state_list = (sRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
-                resp.data.is_state_enabled = resp.data.state_list.length > 0;
+                try {
+                    const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${countryId}`, { headers: ABTYP_HEADERS });
+                    resp.data.state_list = (sRes.data?.Data || []).map(i => ({ 
+                        id: String(i.Id), 
+                        title: i.Name 
+                    }));
+                    resp.data.is_state_enabled = resp.data.state_list.length > 0;
+                } catch (e) { console.error("❌ State API Fail:", e.message); }
             }
 
-            // 3. Parishads
+            // 3. Fetch Parishads
             const stateId = data?.state || data?.s_id;
             if (stateId) {
-                const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${stateId}`, { headers: ABTYP_HEADERS });
-                resp.data.parishad_list = (pRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
-                resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
+                try {
+                    const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${stateId}`, { headers: ABTYP_HEADERS });
+                    resp.data.parishad_list = (pRes.data?.Data || []).map(i => ({ 
+                        id: String(i.Id), 
+                        title: i.Name 
+                    }));
+                    resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
+                } catch (e) { console.error("❌ Parishad API Fail:", e.message); }
             }
             
-            // 4. Final Submit Button
             if (data?.parishad || data?.p_id) resp.data.can_submit = true;
 
-            return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
+            const base64Response = encryptResponse(resp, aesKey, requestIv);
+            return res.status(200).send(base64Response);
         }
 
         if (action === "complete") {
             return res.status(200).send(encryptResponse({ version: "7.1", data: { acknowledged: true } }, aesKey, requestIv));
         }
     } catch (err) {
-        console.error("🔴 Error:", err.message);
-        if (aesKey && requestIv) return res.status(200).send(encryptResponse({ version: "7.1", data: { error: "error" } }, aesKey, requestIv));
-        return res.status(200).send("error");
+        console.error("🔴 Fatal Error:", err.message);
+        return res.status(500).send("Server Error");
     }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server running on port ${PORT}`));
+const PORT = process.env.PORT || 3004;
+app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Production Debug Server on port ${PORT}`));
