@@ -12,10 +12,7 @@ const ABTYP_HEADERS = {
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY?.replace(/\\n/g, "\n").trim();
 
-// ⚡ CACHE: Store countries in memory so the phone doesn't have to wait for an API call
-let countryCache = null;
-
-app.get("/", (req, res) => res.status(200).send("ABTYP Server is Awake"));
+app.get("/", (req, res) => res.status(200).send("ABTYP Flow Server is Active"));
 
 const encryptResponse = (data, aesKey, iv) => {
     const invIv = Buffer.alloc(iv.length);
@@ -44,51 +41,49 @@ app.post("/", async (req, res) => {
         const decryptedPayload = JSON.parse(Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8"));
 
         const { action, data, screen } = decryptedPayload;
-        console.log(`📱 ACTION: ${action} | SCREEN: ${screen}`);
+        console.log(`📱 Action: ${action} | Screen: ${screen}`);
 
-        if (action === "ping") {
-            return res.status(200).send(encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv));
-        }
+        if (action === "ping") return res.status(200).send(encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv));
 
         if (action === "INIT" || action === "data_exchange") {
             const targetScreen = screen || "USER_REG_SCREEN";
 
+            // 🛑 CRITICAL: These keys MUST match your Flow JSON data block
             let resp = {
                 version: "7.1",
                 screen: targetScreen,
                 data: { 
                     gender_list: [{id: "Male", title: "Male"}, {id: "Female", title: "Female"}],
-                    country_list: [], state_list: [], parishad_list: [], 
-                    is_state_enabled: false, is_parishad_enabled: false, can_submit: false 
+                    country_list: [], 
+                    state_list: [], 
+                    parishad_list: [], 
+                    is_state_enabled: false, 
+                    is_parishad_enabled: false, 
+                    can_submit: false 
                 }
             };
 
-            // 1. Instant Country Load (Uses Cache or Fast Fetch)
-            if (!countryCache) {
-                try {
-                    const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS, timeout: 3000 });
-                    countryCache = (cRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
-                } catch (e) { console.error("API Timeout - Using empty list"); }
-            }
-            resp.data.country_list = countryCache || [];
+            // 1. Fetch Countries (Force String IDs)
+            const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
+            resp.data.country_list = (cRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
 
-            // 2. Fetch States (Triggered by selecting a country)
-            const countryId = data?.country || data?.c_id;
+            // 2. Fetch States
+            const countryId = data?.country;
             if (countryId) {
                 const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${countryId}`, { headers: ABTYP_HEADERS });
                 resp.data.state_list = (sRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
                 resp.data.is_state_enabled = resp.data.state_list.length > 0;
             }
 
-            // 3. Fetch Parishads (Triggered by selecting a state)
-            const stateId = data?.state || data?.s_id;
+            // 3. Fetch Parishads
+            const stateId = data?.state;
             if (stateId) {
                 const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${stateId}`, { headers: ABTYP_HEADERS });
                 resp.data.parishad_list = (pRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
                 resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
             }
             
-            if (data?.parishad || data?.p_id) resp.data.can_submit = true;
+            if (data?.parishad) resp.data.can_submit = true;
 
             return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
         }
@@ -103,4 +98,4 @@ app.post("/", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server listening on port ${PORT}`));
+app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Production Server on port ${PORT}`));
