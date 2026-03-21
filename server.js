@@ -10,10 +10,11 @@ const ABTYP_HEADERS = {
     "Content-Type": "application/json" 
 };
 
-const PRIVATE_KEY = process.env.PRIVATE_KEY?.replace(/\\n/g, "\n");
+// Use .trim() to ensure no hidden spaces in your Linux environment variable
+const PRIVATE_KEY = process.env.PRIVATE_KEY?.replace(/\\n/g, "\n").trim();
 let cachedCountries = null;
 
-app.get("/", (req, res) => res.status(200).send("ABTYP Multi-Flow Server Ready"));
+app.get("/", (req, res) => res.status(200).send("ABTYP Server Active"));
 
 const encryptResponse = (data, aesKey, iv) => {
     const invIv = Buffer.alloc(iv.length);
@@ -28,13 +29,10 @@ app.post("/", async (req, res) => {
     if (!encrypted_aes_key) return res.status(200).json({ status: "active" });
 
     let aesKey, requestIv;
-
     try {
         aesKey = crypto.privateDecrypt({ 
-            key: PRIVATE_KEY, 
-            padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, 
-            oaepHash: "sha256", 
-            mgf1Hash: "sha256" 
+            key: PRIVATE_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, 
+            oaepHash: "sha256", mgf1Hash: "sha256" 
         }, Buffer.from(encrypted_aes_key, "base64"));
 
         const flowBuffer = Buffer.from(encrypted_flow_data, "base64");
@@ -43,55 +41,48 @@ app.post("/", async (req, res) => {
         decipher.setAuthTag(flowBuffer.slice(-16));
         const decryptedPayload = JSON.parse(Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8"));
 
-        const { action, data, flow_token, screen } = decryptedPayload;
-        
-        // 🎯 IDENTIFY FLOWS
-        const isUserReg = (flow_token && flow_token.toLowerCase().includes("reg")) || (screen === "USER_REG_SCREEN");
-        const isDeath = (flow_token && flow_token.toLowerCase().includes("death")) || (screen === "DEATH_REG_SINGLE_SCREEN");
-
-        if (action === "ping") return res.status(200).send(encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv));
+        const { action, data, screen } = decryptedPayload;
+        console.log(`📱 [${action}] Processing screen: ${screen}`);
 
         if (action === "INIT" || action === "data_exchange") {
-            // Determine which screen the phone should stay on
-            let targetScreen = "LOCATION_SCREEN"; 
-            if (isUserReg) targetScreen = "USER_REG_SCREEN";
-            if (isDeath) targetScreen = "DEATH_REG_SINGLE_SCREEN";
+            // Force the target screen to match your Flow ID's screen name
+            const targetScreen = "USER_REG_SCREEN";
 
             let resp = {
                 version: "7.1",
                 screen: targetScreen,
                 data: { 
+                    gender_list: [{id: "Male", title: "Male"}, {id: "Female", title: "Female"}],
                     country_list: [], state_list: [], parishad_list: [], 
                     is_state_enabled: false, is_parishad_enabled: false, can_submit: false 
                 }
             };
 
-            // Add Gender dropdown data only for Registration and Death flows
-            if (isUserReg || isDeath) {
-                resp.data.gender_list = [{id: "Male", title: "Male"}, {id: "Female", title: "Female"}];
-            }
-
-            // --- FETCH DATA FROM ABTYP API ---
+            // 1. Load Countries (Immediate for INIT)
             if (!cachedCountries) {
                 const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
-                cachedCountries = (cRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
+                cachedCountries = (cRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
             }
             resp.data.country_list = cachedCountries;
 
-            if (data?.c_id) {
-                const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${data.c_id}`, { headers: ABTYP_HEADERS });
-                resp.data.state_list = (sRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
+            // 2. Load States (Check BOTH c_id and country keys)
+            const selCountry = data?.c_id || data?.country;
+            if (selCountry) {
+                const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${selCountry}`, { headers: ABTYP_HEADERS });
+                resp.data.state_list = (sRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
                 resp.data.is_state_enabled = resp.data.state_list.length > 0;
             }
 
-            if (data?.s_id) {
-                const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${data.s_id}`, { headers: ABTYP_HEADERS });
-                resp.data.parishad_list = (pRes.data?.Data || []).map(i => ({ id: i.Id.toString(), title: i.Name }));
+            // 3. Load Parishads (Check BOTH s_id and state keys)
+            const selState = data?.s_id || data?.state;
+            if (selState) {
+                const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${selState}`, { headers: ABTYP_HEADERS });
+                resp.data.parishad_list = (pRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
                 resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
             }
             
-            // Enable submit button once a Parishad is selected
-            if (data?.p_id) resp.data.can_submit = true;
+            // 4. Enable Submit Button
+            if (data?.p_id || data?.parishad) resp.data.can_submit = true;
 
             return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
         }
@@ -99,18 +90,11 @@ app.post("/", async (req, res) => {
         if (action === "complete") {
             return res.status(200).send(encryptResponse({ version: "7.1", data: { acknowledged: true } }, aesKey, requestIv));
         }
-
     } catch (err) {
-        console.error("🔴 Server Error:", err.message);
-        if (aesKey && requestIv) {
-            return res.status(200).send(encryptResponse({ version: "7.1", data: { error: "error" } }, aesKey, requestIv));
-        }
+        console.error("🔴 Fatal Error:", err.message);
         return res.status(200).send("error");
     }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-});
-    
+app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server listening on port ${PORT}`));
