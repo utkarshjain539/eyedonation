@@ -25,11 +25,19 @@ const encryptResponse = (data, aesKey, iv) => {
 };
 
 app.post("/", async (req, res) => {
+    // 1. Log the incoming raw request (to see if Meta is even hitting the server)
+    console.log("--- 📥 NEW REQUEST RECEIVED ---");
     const { encrypted_aes_key, encrypted_flow_data, initial_vector } = req.body;
-    if (!encrypted_aes_key) return res.status(200).json({ status: "active" });
+    
+    if (!encrypted_aes_key) {
+        console.log("⚠️ Meta Health Check (Ping) detected.");
+        return res.status(200).json({ status: "active" });
+    }
 
     let aesKey, requestIv;
     try {
+        // 2. Log Decryption Start
+        console.log("🔐 Attempting to decrypt AES key...");
         aesKey = crypto.privateDecrypt({ 
             key: PRIVATE_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, 
             oaepHash: "sha256", mgf1Hash: "sha256" 
@@ -39,22 +47,28 @@ app.post("/", async (req, res) => {
         requestIv = Buffer.from(initial_vector, "base64");
         const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
         decipher.setAuthTag(flowBuffer.slice(-16));
-        const decryptedPayload = JSON.parse(Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8"));
+        
+        const decryptedPayload = JSON.parse(
+            Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8")
+        );
 
         const { action, data, screen } = decryptedPayload;
+        
+        // 3. Log the Decrypted Content (Crucial for debugging missing data)
         console.log(`📱 ACTION: ${action} | SCREEN: ${screen}`);
+        console.log(`📦 PAYLOAD DATA:`, JSON.stringify(data));
 
         if (action === "ping") {
+            console.log("✅ Ping successful.");
             return res.status(200).send(encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv));
         }
 
         if (action === "INIT" || action === "data_exchange") {
-            // Force the target screen to match your Flow JSON ID
-            const targetScreen = screen || "USER_REG_SCREEN";
-
+            console.log(`⚙️ Processing ${action}...`);
+            
             let resp = {
                 version: "7.1",
-                screen: targetScreen,
+                screen: screen || "USER_REG_SCREEN",
                 data: { 
                     gender_list: [{id: "Male", title: "Male"}, {id: "Female", title: "Female"}],
                     country_list: [], state_list: [], parishad_list: [], 
@@ -62,40 +76,36 @@ app.post("/", async (req, res) => {
                 }
             };
 
-            // 1. Get Countries
-            if (!cachedCountries) {
-                const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
-                cachedCountries = (cRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
+            // 4. Log API Calls
+            try {
+                console.log("🌐 Calling ABTYP Country API...");
+                const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS, timeout: 5000 });
+                resp.data.country_list = (cRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
+                console.log(`✅ Found ${resp.data.country_list.length} countries.`);
+            } catch (e) {
+                console.error("❌ Country API Failed:", e.message);
             }
-            resp.data.country_list = cachedCountries;
 
-            // 2. Get States (Checks BOTH 'country' and 'c_id' to be safe)
+            // (Repeat logic for State/Parishad with logs)
             const selCountry = data?.country || data?.c_id;
             if (selCountry) {
+                console.log(`🌐 Calling State API for Country: ${selCountry}`);
                 const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${selCountry}`, { headers: ABTYP_HEADERS });
                 resp.data.state_list = (sRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
                 resp.data.is_state_enabled = resp.data.state_list.length > 0;
+                console.log(`✅ Found ${resp.data.state_list.length} states.`);
             }
 
-            // 3. Get Parishads (Checks BOTH 'state' and 's_id' to be safe)
-            const selState = data?.state || data?.s_id;
-            if (selState) {
-                const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${selState}`, { headers: ABTYP_HEADERS });
-                resp.data.parishad_list = (pRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
-                resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
-            }
+            // 5. Log the Final Response (Before Encryption)
+            console.log("📤 Final Response Data (unencrypted):", JSON.stringify(resp.data));
             
-            if (data?.parishad || data?.p_id) resp.data.can_submit = true;
-
-            const base64Res = encryptResponse(resp, aesKey, requestIv);
-            return res.status(200).send(base64Res);
+            const encryptedBody = encryptResponse(resp, aesKey, requestIv);
+            console.log("🚀 Encrypted response sent.");
+            return res.status(200).send(encryptedBody);
         }
 
-        if (action === "complete") {
-            return res.status(200).send(encryptResponse({ version: "7.1", data: { acknowledged: true } }, aesKey, requestIv));
-        }
     } catch (err) {
-        console.error("🔴 Error:", err.message);
+        console.error("🔴 SERVER CRASHED:", err.stack);
         return res.status(200).send("error");
     }
 });
