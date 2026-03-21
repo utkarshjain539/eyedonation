@@ -11,9 +11,11 @@ const ABTYP_HEADERS = {
 };
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY?.replace(/\\n/g, "\n").trim();
-let cachedCountries = null;
 
-app.get("/", (req, res) => res.status(200).send("ABTYP Flow Server is Awake"));
+// ⚡ CACHE: Store countries in memory so the phone doesn't have to wait for an API call
+let countryCache = null;
+
+app.get("/", (req, res) => res.status(200).send("ABTYP Server is Awake"));
 
 const encryptResponse = (data, aesKey, iv) => {
     const invIv = Buffer.alloc(iv.length);
@@ -25,19 +27,11 @@ const encryptResponse = (data, aesKey, iv) => {
 };
 
 app.post("/", async (req, res) => {
-    // 1. Log the incoming raw request (to see if Meta is even hitting the server)
-    console.log("--- 📥 NEW REQUEST RECEIVED ---");
     const { encrypted_aes_key, encrypted_flow_data, initial_vector } = req.body;
-    
-    if (!encrypted_aes_key) {
-        console.log("⚠️ Meta Health Check (Ping) detected.");
-        return res.status(200).json({ status: "active" });
-    }
+    if (!encrypted_aes_key) return res.status(200).json({ status: "active" });
 
     let aesKey, requestIv;
     try {
-        // 2. Log Decryption Start
-        console.log("🔐 Attempting to decrypt AES key...");
         aesKey = crypto.privateDecrypt({ 
             key: PRIVATE_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, 
             oaepHash: "sha256", mgf1Hash: "sha256" 
@@ -47,28 +41,21 @@ app.post("/", async (req, res) => {
         requestIv = Buffer.from(initial_vector, "base64");
         const decipher = crypto.createDecipheriv("aes-128-gcm", aesKey, requestIv);
         decipher.setAuthTag(flowBuffer.slice(-16));
-        
-        const decryptedPayload = JSON.parse(
-            Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8")
-        );
+        const decryptedPayload = JSON.parse(Buffer.concat([decipher.update(flowBuffer.slice(0, -16)), decipher.final()]).toString("utf8"));
 
         const { action, data, screen } = decryptedPayload;
-        
-        // 3. Log the Decrypted Content (Crucial for debugging missing data)
         console.log(`📱 ACTION: ${action} | SCREEN: ${screen}`);
-        console.log(`📦 PAYLOAD DATA:`, JSON.stringify(data));
 
         if (action === "ping") {
-            console.log("✅ Ping successful.");
             return res.status(200).send(encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv));
         }
 
         if (action === "INIT" || action === "data_exchange") {
-            console.log(`⚙️ Processing ${action}...`);
-            
+            const targetScreen = screen || "USER_REG_SCREEN";
+
             let resp = {
                 version: "7.1",
-                screen: screen || "USER_REG_SCREEN",
+                screen: targetScreen,
                 data: { 
                     gender_list: [{id: "Male", title: "Male"}, {id: "Female", title: "Female"}],
                     country_list: [], state_list: [], parishad_list: [], 
@@ -76,39 +63,44 @@ app.post("/", async (req, res) => {
                 }
             };
 
-            // 4. Log API Calls
-            try {
-                console.log("🌐 Calling ABTYP Country API...");
-                const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS, timeout: 5000 });
-                resp.data.country_list = (cRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
-                console.log(`✅ Found ${resp.data.country_list.length} countries.`);
-            } catch (e) {
-                console.error("❌ Country API Failed:", e.message);
+            // 1. Instant Country Load (Uses Cache or Fast Fetch)
+            if (!countryCache) {
+                try {
+                    const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS, timeout: 3000 });
+                    countryCache = (cRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
+                } catch (e) { console.error("API Timeout - Using empty list"); }
             }
+            resp.data.country_list = countryCache || [];
 
-            // (Repeat logic for State/Parishad with logs)
-            const selCountry = data?.country || data?.c_id;
-            if (selCountry) {
-                console.log(`🌐 Calling State API for Country: ${selCountry}`);
-                const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${selCountry}`, { headers: ABTYP_HEADERS });
+            // 2. Fetch States (Triggered by selecting a country)
+            const countryId = data?.country || data?.c_id;
+            if (countryId) {
+                const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${countryId}`, { headers: ABTYP_HEADERS });
                 resp.data.state_list = (sRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
                 resp.data.is_state_enabled = resp.data.state_list.length > 0;
-                console.log(`✅ Found ${resp.data.state_list.length} states.`);
             }
 
-            // 5. Log the Final Response (Before Encryption)
-            console.log("📤 Final Response Data (unencrypted):", JSON.stringify(resp.data));
+            // 3. Fetch Parishads (Triggered by selecting a state)
+            const stateId = data?.state || data?.s_id;
+            if (stateId) {
+                const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${stateId}`, { headers: ABTYP_HEADERS });
+                resp.data.parishad_list = (pRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
+                resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
+            }
             
-            const encryptedBody = encryptResponse(resp, aesKey, requestIv);
-            console.log("🚀 Encrypted response sent.");
-            return res.status(200).send(encryptedBody);
+            if (data?.parishad || data?.p_id) resp.data.can_submit = true;
+
+            return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
         }
 
+        if (action === "complete") {
+            return res.status(200).send(encryptResponse({ version: "7.1", data: { acknowledged: true } }, aesKey, requestIv));
+        }
     } catch (err) {
-        console.error("🔴 SERVER CRASHED:", err.stack);
+        console.error("🔴 Error:", err.message);
         return res.status(200).send("error");
     }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Render Server Live on ${PORT}`));
+app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server listening on port ${PORT}`));
