@@ -11,8 +11,9 @@ const ABTYP_HEADERS = {
 };
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY?.replace(/\\n/g, "\n").trim();
+let cachedCountries = null;
 
-app.get("/", (req, res) => res.status(200).send("ABTYP Flow Server is Active"));
+app.get("/", (req, res) => res.status(200).send("ABTYP Flow Server Active"));
 
 const encryptResponse = (data, aesKey, iv) => {
     const invIv = Buffer.alloc(iv.length);
@@ -46,28 +47,25 @@ app.post("/", async (req, res) => {
         if (action === "ping") return res.status(200).send(encryptResponse({ version: "7.1", data: { status: "active" } }, aesKey, requestIv));
 
         if (action === "INIT" || action === "data_exchange") {
-            const targetScreen = screen || "USER_REG_SCREEN";
-
-            // 🛑 CRITICAL: These keys MUST match your Flow JSON data block
+            const targetScreen = "USER_REG_SCREEN";
             let resp = {
                 version: "7.1",
                 screen: targetScreen,
                 data: { 
                     gender_list: [{id: "Male", title: "Male"}, {id: "Female", title: "Female"}],
-                    country_list: [], 
-                    state_list: [], 
-                    parishad_list: [], 
-                    is_state_enabled: false, 
-                    is_parishad_enabled: false, 
-                    can_submit: false 
+                    country_list: [], state_list: [], parishad_list: [], 
+                    is_state_enabled: false, is_parishad_enabled: false, can_submit: false 
                 }
             };
 
-            // 1. Fetch Countries (Force String IDs)
-            const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
-            resp.data.country_list = (cRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
+            // 1. Countries
+            if (!cachedCountries) {
+                const cRes = await axios.get("https://api.abtyp.org/v0/country", { headers: ABTYP_HEADERS });
+                cachedCountries = (cRes.data?.Data || []).map(i => ({ id: String(i.Id), title: i.Name }));
+            }
+            resp.data.country_list = cachedCountries;
 
-            // 2. Fetch States
+            // 2. States
             const countryId = data?.country;
             if (countryId) {
                 const sRes = await axios.get(`https://api.abtyp.org/v0/state?CountryId=${countryId}`, { headers: ABTYP_HEADERS });
@@ -75,7 +73,7 @@ app.post("/", async (req, res) => {
                 resp.data.is_state_enabled = resp.data.state_list.length > 0;
             }
 
-            // 3. Fetch Parishads
+            // 3. Parishads
             const stateId = data?.state;
             if (stateId) {
                 const pRes = await axios.get(`https://api.abtyp.org/v0/parishad?StateId=${stateId}`, { headers: ABTYP_HEADERS });
@@ -83,6 +81,7 @@ app.post("/", async (req, res) => {
                 resp.data.is_parishad_enabled = resp.data.parishad_list.length > 0;
             }
             
+            // Final submit enable
             if (data?.parishad) resp.data.can_submit = true;
 
             return res.status(200).send(encryptResponse(resp, aesKey, requestIv));
@@ -98,4 +97,4 @@ app.post("/", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Production Server on port ${PORT}`));
+app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Node.js Flow Logic live on ${PORT}`));
